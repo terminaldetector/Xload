@@ -58,8 +58,10 @@ fun TrainingScreen(viewModel: TrainingSessionViewModel, onBack: () -> Unit, onNe
                 current.etaSeconds?.let { Text("Осталось: ~${it} с") }
             } else {
                 Text(
-                    "Справочный движок обучается на синтетических данных за миллисекунды — " +
-                        "это демонстрация пайплайна, а не реальное дообучение LLM (см. README).",
+                    "Обучение идёт через настоящий termux-train (чистый Python-автоград, без " +
+                        "GPU-ускорения) поверх встроенной демо-архитектуры — на слабом устройстве " +
+                        "один шаг может занимать секунды. Это ещё не дообучение реальных весов " +
+                        "выбранной модели (см. README).",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

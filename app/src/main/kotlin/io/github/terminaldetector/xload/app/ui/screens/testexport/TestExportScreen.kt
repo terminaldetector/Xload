@@ -25,7 +25,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import io.github.terminaldetector.xload.app.ui.components.StepScaffold
 import io.github.terminaldetector.xload.app.viewmodel.TrainingSessionViewModel
-import io.github.terminaldetector.xload.core.checkpoint.AdapterCheckpointJson
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -35,17 +35,19 @@ fun TestExportScreen(viewModel: TrainingSessionViewModel, onRestart: () -> Unit)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val progress by viewModel.trainingProgress.collectAsState()
-    val checkpoint = progress?.checkpoint
+    val selectedModel by viewModel.selectedModel.collectAsState()
+    val loraConfig by viewModel.loraConfig.collectAsState()
+    val checkpointPath = progress?.checkpointPath
     var exportMessage by remember { mutableStateOf<String?>(null) }
 
     val exportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/json"),
+        ActivityResultContracts.CreateDocument("application/octet-stream"),
     ) { uri ->
-        if (uri == null || checkpoint == null) return@rememberLauncherForActivityResult
+        if (uri == null || checkpointPath == null) return@rememberLauncherForActivityResult
         scope.launch {
             withContext(Dispatchers.IO) {
-                context.contentResolver.openOutputStream(uri)?.use { out ->
-                    out.write(AdapterCheckpointJson.encode(checkpoint).toByteArray())
+                File(checkpointPath).inputStream().use { input ->
+                    context.contentResolver.openOutputStream(uri)?.use { out -> input.copyTo(out) }
                 }
             }
             exportMessage = "Адаптер сохранён."
@@ -60,24 +62,30 @@ fun TestExportScreen(viewModel: TrainingSessionViewModel, onRestart: () -> Unit)
                 .fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            if (checkpoint != null) {
+            if (checkpointPath != null) {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("Итог обучения", style = MaterialTheme.typography.titleMedium)
-                        Text("Модель: ${checkpoint.baseModel.displayName}")
-                        Text("LoRA: rank=${checkpoint.lora.rank}, alpha=${checkpoint.lora.alpha}")
-                        Text("Финальный loss: %.4f".format(checkpoint.finalLoss))
-                        Text("Примеров использовано: ${checkpoint.trainedSamples}")
+                        Text("Модель (заявленная): ${selectedModel?.displayName ?: "?"}")
+                        Text("LoRA: rank=${loraConfig.rank}, alpha=${loraConfig.alpha}")
+                        Text("Финальный loss: %.4f".format(progress?.loss ?: 0f))
+                        Text(
+                            "Адаптер обучен движком termux-train на встроенной демо-архитектуре " +
+                                "(не на реальных весах выбранной модели) — см. README.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
 
                 OutlinedButton(
                     onClick = {
-                        exportLauncher.launch("xload-adapter-${checkpoint.baseModel.name.lowercase()}.json")
+                        val name = selectedModel?.name?.lowercase() ?: "adapter"
+                        exportLauncher.launch("xload-adapter-$name.safetensors")
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Экспортировать чекпоинт адаптера (JSON)")
+                    Text("Экспортировать адаптер (SafeTensors)")
                 }
                 exportMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             } else {
@@ -89,8 +97,8 @@ fun TestExportScreen(viewModel: TrainingSessionViewModel, onRestart: () -> Unit)
                     Text("Проверка в чате", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "Появится вместе с реальным движком инференса (llama.cpp / MLC-LLM / " +
-                            "MediaPipe LlmInference) — справочный движок обучения в этой сборке " +
-                            "не выполняет генерацию текста, см. README.",
+                            "MediaPipe LlmInference) — обучение сейчас не подключено к инференсу " +
+                            "реальной базовой модели, см. README.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

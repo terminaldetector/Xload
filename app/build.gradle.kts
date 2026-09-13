@@ -2,6 +2,8 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
+    id("com.chaquo.python") version "17.0.0"
 }
 
 android {
@@ -14,6 +16,31 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+
+        ndk {
+            // Chaquopy ships a full CPython build per ABI; keep this to the ABIs
+            // that matter for real devices + the emulator to limit APK size.
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
+
+        python {
+            version = "3.11"
+            pip {
+                // Pinned deliberately: termux-train 1.1.4/1.1.5 added a hard
+                // dependency on `ameva-component-sdk`, which is not published
+                // on PyPI (verified 404) and makes those versions uninstallable.
+                // 1.1.3 is the newest version that installs and runs cleanly —
+                // verified end-to-end (LoRA injection, training, SafeTensors
+                // checkpoint round-trip) in a local venv against this exact pin.
+                install("termux-train==1.1.3")
+            }
+        }
+    }
+
+    sourceSets {
+        getByName("main") {
+            python.srcDirs("src/main/python")
+        }
     }
 
     buildTypes {
@@ -52,6 +79,7 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
 
     debugImplementation(libs.androidx.ui.tooling)
 

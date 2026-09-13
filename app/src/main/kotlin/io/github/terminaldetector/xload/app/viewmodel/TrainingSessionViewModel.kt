@@ -1,12 +1,13 @@
 package io.github.terminaldetector.xload.app.viewmodel
 
+import android.app.Application
 import android.net.Uri
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.github.terminaldetector.xload.app.engine.TermuxTrainEngine
 import io.github.terminaldetector.xload.core.dataset.DatasetParseResult
 import io.github.terminaldetector.xload.core.dataset.JsonlDatasetParser
 import io.github.terminaldetector.xload.core.engine.TrainingEngine
-import io.github.terminaldetector.xload.core.engine.reference.ReferenceLoraEngine
 import io.github.terminaldetector.xload.core.model.BaseModel
 import io.github.terminaldetector.xload.core.model.LoraConfig
 import io.github.terminaldetector.xload.core.model.TrainingConfig
@@ -20,9 +21,15 @@ import kotlinx.coroutines.launch
 /**
  * Holds the whole training wizard's state (model -> dataset -> hyperparameters ->
  * training -> export) so it survives navigating back and forth between steps.
+ *
+ * Uses [TermuxTrainEngine] (real termux-train via Chaquopy) rather than the
+ * pure-Kotlin [io.github.terminaldetector.xload.core.engine.reference.ReferenceLoraEngine] —
+ * see that class and app/src/main/python/xload_trainer.py for what each does
+ * and doesn't prove. AndroidViewModel (not plain ViewModel) because the
+ * engine needs a Context for Chaquopy and for where to write the checkpoint.
  */
-class TrainingSessionViewModel : ViewModel() {
-    private val trainingEngine: TrainingEngine = ReferenceLoraEngine()
+class TrainingSessionViewModel(application: Application) : AndroidViewModel(application) {
+    private val trainingEngine: TrainingEngine = TermuxTrainEngine(application)
 
     private val _selectedModel = MutableStateFlow<BaseModel?>(null)
     val selectedModel: StateFlow<BaseModel?> = _selectedModel.asStateFlow()

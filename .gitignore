@@ -22,3 +22,7 @@ build/
 /app/src/main/assets/models/
 *.gguf
 *.safetensors
+
+# Python (Chaquopy bundles app/src/main/python/ into the APK at build time)
+__pycache__/
+*.pyc
