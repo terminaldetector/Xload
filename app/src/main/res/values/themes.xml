@@ -1,0 +1,10 @@
+<resources>
+    <!--
+        Platform theme, not a Material Components one: the app's actual theming is
+        done entirely in Compose (see ui/theme/Theme.kt). This only covers the
+        window background before Compose takes over, so it needs no extra AAR.
+    -->
+    <style name="Theme.Xload" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/ic_launcher_background</item>
+    </style>
+</resources>

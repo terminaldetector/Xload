@@ -1,0 +1,2 @@
+# Add project specific ProGuard rules here.
+# Release builds currently ship with minification disabled (see app/build.gradle.kts).

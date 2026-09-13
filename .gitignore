@@ -1,0 +1,24 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+build/
+/captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+
+# Android Studio
+*.hprof
+.navigation/
+
+# Keystores
+*.jks
+*.keystore
+
+# App runtime data (models/datasets/adapters are large, never commit them)
+/app/src/main/assets/models/
+*.gguf
+*.safetensors
