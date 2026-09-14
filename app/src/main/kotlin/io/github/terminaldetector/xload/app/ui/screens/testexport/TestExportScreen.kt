@@ -75,6 +75,8 @@ fun TestExportScreen(viewModel: TrainingSessionViewModel, onRestart: () -> Unit)
                 .fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            PersonalityPortraitCard(viewModel)
+
             if (checkpointPath != null) {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -123,9 +125,57 @@ fun TestExportScreen(viewModel: TrainingSessionViewModel, onRestart: () -> Unit)
 }
 
 @Composable
+private fun PersonalityPortraitCard(viewModel: TrainingSessionViewModel) {
+    val datasetResult by viewModel.datasetResult.collectAsState()
+    val portrait by viewModel.personalityPortrait.collectAsState()
+    val error by viewModel.personalityError.collectAsState()
+    val isAnalyzing by viewModel.isAnalyzingPersonality.collectAsState()
+    val samples = datasetResult?.samples ?: emptyList()
+
+    if (samples.isEmpty()) return
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Портрет личности (пробник)", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Пробует описать стиль общения и характерные темы по примерам из датасета — " +
+                    "свободный текст от той же on-device модели, не структурированная карта и не " +
+                    "кластеризация RAPTOR/FractalMind (см. README). Не требует завершённого обучения. " +
+                    "Если портрет построен, он подмешивается в контекст чата ниже.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            when {
+                error != null -> Text(
+                    "Ошибка: $error",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                portrait != null -> Text(portrait!!, style = MaterialTheme.typography.bodyMedium)
+            }
+
+            if (isAnalyzing) {
+                OutlinedButton(onClick = { viewModel.cancelPersonalityAnalysis() }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Стоп")
+                }
+            } else {
+                OutlinedButton(
+                    onClick = { viewModel.analyzePersonality() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (portrait != null) "Построить заново" else "Построить портрет")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ChatCard(viewModel: TrainingSessionViewModel) {
     val messages by viewModel.chatMessages.collectAsState()
     val isGenerating by viewModel.isGenerating.collectAsState()
+    val portrait by viewModel.personalityPortrait.collectAsState()
     var input by remember { mutableStateOf("") }
     val scrollState = rememberScrollState()
 
@@ -140,7 +190,8 @@ private fun ChatCard(viewModel: TrainingSessionViewModel) {
                 "Генерация через termux-train поверх обученного адаптера — без KV-кэша, поэтому " +
                     "ответ короткий и не мгновенный (см. README про xload_inference.py). Не " +
                     "полноценный чат-движок (llama.cpp / MLC-LLM / MediaPipe LlmInference) — та " +
-                    "задача ещё впереди, это лишь проверка, что дообучение вообще что-то поменяло.",
+                    "задача ещё впереди, это лишь проверка, что дообучение вообще что-то поменяло." +
+                    if (portrait != null) " Портрет личности выше подмешивается в каждое сообщение." else "",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

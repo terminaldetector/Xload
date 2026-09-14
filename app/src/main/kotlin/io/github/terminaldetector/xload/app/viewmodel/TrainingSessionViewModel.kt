@@ -72,8 +72,20 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
+    private val _personalityPortrait = MutableStateFlow<String?>(null)
+    /** Free-text summary from [analyzePersonality], or null if not built yet. When set, gets
+     *  prepended as context to every [sendChatMessage] call — see that method. */
+    val personalityPortrait: StateFlow<String?> = _personalityPortrait.asStateFlow()
+
+    private val _personalityError = MutableStateFlow<String?>(null)
+    val personalityError: StateFlow<String?> = _personalityError.asStateFlow()
+
+    private val _isAnalyzingPersonality = MutableStateFlow(false)
+    val isAnalyzingPersonality: StateFlow<Boolean> = _isAnalyzingPersonality.asStateFlow()
+
     private var trainingJob: Job? = null
     private var generationJob: Job? = null
+    private var analysisJob: Job? = null
 
     fun selectModel(model: BaseModel) {
         _selectedModel.value = model
@@ -144,11 +156,17 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
      *  particular: no KV-cache, so replies are capped at a short default length). Uses the same
      *  [loraConfig] and imported GGUF file as training, since the checkpoint's adapter weights
      *  were saved from a model built with exactly those. Requires a completed training run (a
-     *  real checkpoint on disk) — the UI only shows the chat card once that holds.
+     *  real checkpoint on disk) — the UI only shows the chat card once that holds. When
+     *  [personalityPortrait] is set, it's prepended to [text] as context for this one message —
+     *  a first, deliberately small step towards a real memory/retrieval layer (see README).
      */
     fun sendChatMessage(text: String) {
         val checkpointPath = _trainingProgress.value?.checkpointPath ?: return
-        if (text.isBlank() || _isGenerating.value) return
+        if (text.isBlank() || _isGenerating.value || _isAnalyzingPersonality.value) return
+
+        val effectivePrompt = _personalityPortrait.value?.let { portrait ->
+            "Контекст о собеседнике: $portrait\n\nСообщение: $text"
+        } ?: text
 
         _chatMessages.value = _chatMessages.value + ChatMessage(ChatRole.USER, text) +
             ChatMessage(ChatRole.ASSISTANT, "")
@@ -160,7 +178,7 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
                 lora = _loraConfig.value,
                 modelFilePath = _importedModelFilePath.value,
                 checkpointPath = checkpointPath,
-                prompt = text,
+                prompt = effectivePrompt,
             ).collect { progress ->
                 _chatMessages.value = _chatMessages.value.dropLast(1) +
                     ChatMessage(
@@ -179,11 +197,45 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
         inferenceEngine.cancel()
     }
 
+    /** Builds [personalityPortrait] from the loaded dataset — see [InferenceEngine.analyzePersonality]
+     *  and app/src/main/python/xload_inference.py's analyze_personality() for what this does and
+     *  doesn't prove (a small free-text-summary first step, not real clustering or a structured
+     *  trait model). Needs only a loaded dataset, not a completed training run. */
+    fun analyzePersonality() {
+        val samples = _datasetResult.value?.samples ?: return
+        if (samples.isEmpty() || _isAnalyzingPersonality.value || _isGenerating.value) return
+
+        _personalityPortrait.value = null
+        _personalityError.value = null
+        _isAnalyzingPersonality.value = true
+
+        analysisJob?.cancel()
+        analysisJob = viewModelScope.launch {
+            inferenceEngine.analyzePersonality(
+                dataset = samples,
+                modelFilePath = _importedModelFilePath.value,
+            ).collect { progress ->
+                _personalityPortrait.value = progress.text
+                if (progress.state == GenerationState.FAILED) {
+                    _personalityError.value = progress.message
+                }
+                if (progress.state != GenerationState.GENERATING) {
+                    _isAnalyzingPersonality.value = false
+                }
+            }
+        }
+    }
+
+    fun cancelPersonalityAnalysis() {
+        inferenceEngine.cancel()
+    }
+
     fun reset() {
         trainingEngine.cancel()
         trainingJob?.cancel()
         inferenceEngine.cancel()
         generationJob?.cancel()
+        analysisJob?.cancel()
         _selectedModel.value = null
         _importedModelFileName.value = null
         _importedModelFilePath.value = null
@@ -193,6 +245,9 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
         _trainingProgress.value = null
         _chatMessages.value = emptyList()
         _isGenerating.value = false
+        _personalityPortrait.value = null
+        _personalityError.value = null
+        _isAnalyzingPersonality.value = false
     }
 
     override fun onCleared() {
