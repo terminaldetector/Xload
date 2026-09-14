@@ -1,8 +1,14 @@
 """RMSNorm, SwiGLU FFN, and grouped-query attention (GQA) built on termux-train
 primitives. termux-train ships plain LayerNorm/MultiHeadAttention/ReLU-FFN but
-none of these Qwen2/Llama/Gemma-family building blocks, so gguf_qwen2_model.py
-needs them written by hand to assemble a real architecture instead of
-termux-train's own small demo transformer.
+none of these Llama-style building blocks, so gguf_llama_family_model.py needs
+them written by hand to assemble a real architecture instead of termux-train's
+own small demo transformer.
+
+Shared by Qwen2 and Llama (near-identical apart from q/k/v bias -- see
+LlamaStyleBlock's qkv_bias param). NOT shared by Gemma-3, which needs its own
+RMSNorm variant (`x*(1+weight)`, not `x*weight`), a non-head_dim attention
+scaling, alternating sliding/global attention layers with two different RoPE
+thetas, and GeGLU instead of SwiGLU -- see the README roadmap.
 """
 import math
 
@@ -52,10 +58,11 @@ def _repeat_kv(x, n_rep):
 
 class GQAAttention(Module):
     """Grouped-query attention: num_kv_heads can be < num_heads (Qwen2/Llama/Gemma-style).
-    q/k/v default to bias=True since Qwen2 (unusually) keeps a bias there; o_proj never does.
+    o_proj never has a bias; q/k/v do iff the caller passes bias=True (only Qwen2
+    keeps one there -- Llama and Gemma don't).
     """
 
-    def __init__(self, d_model, num_heads, num_kv_heads, max_seq_len=2048, rope_theta=10000.0, bias=True):
+    def __init__(self, d_model, num_heads, num_kv_heads, max_seq_len=2048, rope_theta=10000.0, bias=False):
         super().__init__()
         assert d_model % num_heads == 0
         assert num_heads % num_kv_heads == 0
@@ -96,11 +103,11 @@ class GQAAttention(Module):
         return self.out_proj(context)
 
 
-class Qwen2Block(Module):
-    def __init__(self, d_model, num_heads, num_kv_heads, d_ff, rms_eps, max_seq_len, rope_theta):
+class LlamaStyleBlock(Module):
+    def __init__(self, d_model, num_heads, num_kv_heads, d_ff, rms_eps, max_seq_len, rope_theta, qkv_bias=False):
         super().__init__()
         self.input_layernorm = RMSNorm(d_model, eps=rms_eps)
-        self.self_attn = GQAAttention(d_model, num_heads, num_kv_heads, max_seq_len, rope_theta)
+        self.self_attn = GQAAttention(d_model, num_heads, num_kv_heads, max_seq_len, rope_theta, bias=qkv_bias)
         self.post_attention_layernorm = RMSNorm(d_model, eps=rms_eps)
         self.mlp = SwiGLU(d_model, d_ff)
 

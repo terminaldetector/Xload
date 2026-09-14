@@ -91,7 +91,8 @@ fun ModelSelectionScreen(viewModel: TrainingSessionViewModel, onNext: () -> Unit
             when {
                 importedModelFileName == null -> Unit
                 importedModelFilePath != null -> Text(
-                    "Импортирован и будет использован для реального дообучения (Qwen2-архитектура).",
+                    "Импортирован и будет использован для реального дообучения, если архитектура " +
+                        "файла — qwen2 или llama (иначе автоматически используется демо-модель).",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

@@ -1,5 +1,5 @@
-"""Scratch/test copy — builds a Qwen2-family model + tokenizer straight out of
-a GGUF file's own metadata and tensors, using termux-train as the tensor/
+"""Builds a Llama-style model (Qwen2, Llama) + tokenizer straight out of a
+GGUF file's own metadata and tensors, using termux-train as the tensor/
 autograd/training engine and the official `gguf` package for file I/O and
 dequantization.
 
@@ -12,10 +12,20 @@ Linear.weight is the opposite, (in_features, out_features), and computes
 transpose on the way in.
 
 Bias note: Qwen2 is unusual among RoPE/GQA architectures in keeping a bias
-on q/k/v (but not o_proj or the FFN) -- this was found the hard way, by a
-forward pass matching an independent numpy reference to 0.0 on every stage
-except the attention output, until the missing bias load was added (see
-load_bias() below).
+on q/k/v (but not o_proj or the FFN); Llama has none at all. This was found
+the hard way for Qwen2, by a forward pass matching an independent numpy
+reference to 0.0 on every stage except the attention output, until the
+missing bias load was added (see load_bias() below) -- load_bias() itself
+is architecture-agnostic (a no-op when the layer has no bias to begin with),
+only _ARCH_CONFIG's qkv_bias flag needs to be right per architecture.
+
+Gemma-3 is deliberately NOT in _ARCH_CONFIG: its RMSNorm uses `x*(1+weight)`
+rather than `x*weight`, its attention scaling is a config value
+(query_pre_attn_scalar) rather than 1/sqrt(head_dim), it alternates sliding-
+window and global attention layers with two different RoPE thetas, and its
+MLP is GeGLU rather than SwiGLU -- confirmed by reading HuggingFace
+transformers' own modeling_gemma3.py/configuration_gemma3.py source rather
+than from memory. None of LlamaStyleBlock fits it; see the README roadmap.
 """
 import numpy as np
 from gguf import GGMLQuantizationType, GGUFReader
@@ -30,18 +40,25 @@ from termux_train.nn.sequential import Sequential
 from termux_train.nn.transformer import cross_entropy_loss
 
 from gguf_bpe import GgufBpeTokenizer
-from qwen2_blocks import Qwen2Block, RMSNorm
+from llama_style_blocks import LlamaStyleBlock, RMSNorm
+
+# Per-architecture quirks within the "Llama-style" family this module covers.
+_ARCH_CONFIG = {
+    "qwen2": {"qkv_bias": True},
+    "llama": {"qkv_bias": False},
+}
 
 
-class Qwen2GgufModel(Module):
-    def __init__(self, cfg):
+class LlamaFamilyGgufModel(Module):
+    def __init__(self, cfg, qkv_bias):
         super().__init__()
         self.cfg = cfg
         self.embed_tokens = Embedding(cfg["vocab_size"], cfg["d_model"])
         self.blocks = Sequential(*[
-            Qwen2Block(
+            LlamaStyleBlock(
                 cfg["d_model"], cfg["num_heads"], cfg["num_kv_heads"],
                 cfg["d_ff"], cfg["rms_eps"], cfg["max_seq_len"], cfg["rope_theta"],
+                qkv_bias=qkv_bias,
             )
             for _ in range(cfg["num_layers"])
         ])
@@ -106,14 +123,21 @@ def _as_vector_param(arr):
     return Parameter(arr.tolist(), requires_grad=False)
 
 
-def load_qwen2_gguf(path):
+def supported_architectures():
+    return sorted(_ARCH_CONFIG)
+
+
+def load_gguf_model(path):
     reader = GGUFReader(path)
     arch = _field_str(reader, "general.architecture")
-    if arch != "qwen2":
-        raise ValueError("Only the qwen2 GGUF architecture family is supported so far, got: %s" % arch)
+    if arch not in _ARCH_CONFIG:
+        raise ValueError(
+            "Unsupported GGUF architecture %r (supported: %s)" % (arch, ", ".join(supported_architectures()))
+        )
+    qkv_bias = _ARCH_CONFIG[arch]["qkv_bias"]
 
     cfg = read_config(reader, arch)
-    model = Qwen2GgufModel(cfg)
+    model = LlamaFamilyGgufModel(cfg, qkv_bias=qkv_bias)
     by_name = {t.name: t for t in reader.tensors}
 
     def matrix(name):
@@ -123,11 +147,11 @@ def load_qwen2_gguf(path):
         return _as_vector_param(_dequantized_numpy(by_name[name]))
 
     def load_bias(linear, name):
-        # Qwen2 (unusually, vs. most RoPE/GQA models) keeps attention biases
-        # on q/k/v but not on o_proj/the FFN -- only set .bias when both the
-        # layer was built with one AND the file actually has that tensor;
-        # otherwise a leftover random bias from Linear's own __init__ would
-        # silently corrupt every forward pass through that layer.
+        # No-op for architectures whose q/k/v Linear was built with bias=False
+        # to begin with (linear.bias is already None); otherwise loads the
+        # real bias tensor, or zeros if the file surprisingly doesn't have
+        # one -- either way, never leaves Linear's own random __init__ bias
+        # in place, which would silently corrupt every forward pass through it.
         if linear.bias is None:
             return
         if name in by_name:
