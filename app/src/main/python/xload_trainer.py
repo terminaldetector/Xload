@@ -1,25 +1,30 @@
 """
 Bridges Xload's Kotlin TrainingEngine to termux-train's real LoRA/autograd/
-optimizer/checkpoint machinery, training a small on-device transformer.
+optimizer/checkpoint machinery, training a real on-device transformer when
+the user has imported a GGUF file, or a small demo architecture otherwise.
 
 Called from Kotlin (io.github.terminaldetector.xload.app.engine.TermuxTrainEngine)
 via Chaquopy. Every public function here takes and/or returns plain strings
 (JSON) rather than richer Python objects, so the Kotlin/Python boundary only
 has to agree on a JSON shape rather than Chaquopy's Java<->Python type mapping.
 
-Architecture note: this trains termux_train.nn.transformer.TinyTransformerLM,
-a small demo architecture bundled with termux-train — NOT the real Qwen/Gemma/
-Llama weights the user picked on the model-selection screen. Loading an
-actual GGUF/SafeTensors base model and matching its real layer names is a
-separate, much larger piece of work (see the project README). What this
-module proves end-to-end, for real, is the rest of the pipeline: on-device
-tokenization, LoRA-adapter injection into attention layers, backprop through
-termux-train's own autograd engine, and a checkpoint termux-train's own
-loader can read back — the exact boundary a production backend would sit
-behind.
+Two model paths:
+- `model_path` given and loadable: gguf_qwen2_model.load_qwen2_gguf() builds
+  the *real* architecture (RMSNorm/GQA/SwiGLU/RoPE, all parameterized from
+  the file's own metadata) and loads its *real* dequantized weights, plus a
+  tokenizer built from the file's own embedded vocab/merges. Only the qwen2
+  GGUF architecture family is supported so far (see README) — Gemma/Llama
+  use different norm/FFN/RoPE-scaling details qwen2_blocks.py doesn't cover.
+- otherwise (or if loading that file fails): falls back to
+  termux_train.nn.transformer.TinyTransformerLM, termux-train's own small
+  demo architecture, with its bundled ByteTokenizer. This is NOT the real
+  Qwen/Gemma/Llama weights the model-selection screen lists — it exists so
+  the rest of the pipeline (tokenize -> LoRA -> backprop -> checkpoint) has
+  something to run against with zero setup.
 """
 
 import json
+import os
 import time
 
 from termux_train import optim
@@ -29,14 +34,19 @@ from termux_train.nn.transformer import TinyTransformerLM
 from termux_train.tensor import tensor
 from termux_train.tokenization.byte import ByteTokenizer
 
-# Fixed demo architecture (see module docstring) — deliberately small so a
-# training run finishes in a reasonable time on the pure-Python backend that
-# ships without the optional "accelerated" (NumPy) extra.
-D_MODEL = 64
-NUM_HEADS = 4
-D_FF = 128
-NUM_LAYERS = 2
-MAX_SEQ_LEN = 256
+# Demo-path architecture — deliberately small so a training run finishes in a
+# reasonable time on the pure-Python backend that ships without the optional
+# "accelerated" (NumPy) extra.
+DEMO_D_MODEL = 64
+DEMO_NUM_HEADS = 4
+DEMO_D_FF = 128
+DEMO_NUM_LAYERS = 2
+DEMO_MAX_SEQ_LEN = 256
+
+# Real-model path: cap how much context a single training step processes,
+# regardless of what the file declares, so one step stays fast even on a
+# pure-Python backend.
+REAL_MODEL_MAX_SEQ_LEN = 512
 
 _cancelled = False
 
@@ -46,27 +56,48 @@ def cancel():
     _cancelled = True
 
 
-def _inject_lora(model, rank, alpha):
+def _build_demo_model():
+    tok = ByteTokenizer()
+    model = TinyTransformerLM(
+        vocab_size=tok.vocab_size, d_model=DEMO_D_MODEL, num_heads=DEMO_NUM_HEADS,
+        d_ff=DEMO_D_FF, num_layers=DEMO_NUM_LAYERS, max_seq_len=DEMO_MAX_SEQ_LEN,
+    )
+    return model, tok, "attn"
+
+
+def _load_real_model(model_path):
+    from gguf_qwen2_model import load_qwen2_gguf
+    model, tok, cfg = load_qwen2_gguf(model_path)
+    model.cfg["max_seq_len"] = min(cfg["max_seq_len"], REAL_MODEL_MAX_SEQ_LEN)
+    return model, tok, "self_attn"
+
+
+def _inject_lora(model, attn_attr, rank, alpha):
     """Replace each attention block's q/k/v/out Linear with a LoRALinear,
-    freezing the original (here: randomly initialized) weights as the base
-    and leaving only the new lora_A/lora_B factors trainable — see the
-    project's on-device analysis notes for why this has to be done by hand
-    (termux-train ships LoRALinear but no model-wide "apply LoRA" helper).
+    freezing the original (pretrained, if a real GGUF was loaded) weights as
+    the base and leaving only the new lora_A/lora_B factors trainable — see
+    the README's on-device analysis notes for why this has to be done by
+    hand (termux-train ships LoRALinear but no model-wide "apply" helper).
+    Each layer's rank is capped to what LoRALinear actually allows for its
+    own shape (<= min(in_features, out_features)) rather than assuming every
+    block has the same dimensions, since GQA makes k_proj/v_proj narrower
+    than q_proj/out_proj.
     """
     for block in model.blocks:
-        attn = block.attn
-        for attr in ("q_proj", "k_proj", "v_proj", "out_proj"):
-            orig = getattr(attn, attr)
+        attn = getattr(block, attn_attr)
+        for proj_attr in ("q_proj", "k_proj", "v_proj", "out_proj"):
+            orig = getattr(attn, proj_attr)
+            layer_rank = max(1, min(rank, orig.in_features, orig.out_features))
             wrapped = LoRALinear(
                 orig.in_features, orig.out_features,
-                rank=rank, alpha=float(alpha), bias=orig.bias is not None,
+                rank=layer_rank, alpha=float(alpha), bias=orig.bias is not None,
             )
             wrapped.base.weight = orig.weight
             wrapped.base.weight.requires_grad = False
             if orig.bias is not None:
                 wrapped.base.bias = orig.bias
                 wrapped.base.bias.requires_grad = False
-            setattr(attn, attr, wrapped)
+            setattr(attn, proj_attr, wrapped)
 
 
 def _format_sample(sample):
@@ -77,6 +108,10 @@ def _format_sample(sample):
     return prompt + " -> " + response
 
 
+def _pad_id(tok):
+    return tok.PAD_ID if hasattr(tok, "PAD_ID") else tok.pad_id
+
+
 def _loss_value(loss_tensor):
     v = loss_tensor.data
     while isinstance(v, list):
@@ -84,12 +119,13 @@ def _loss_value(loss_tensor):
     return float(v)
 
 
-def train(config_json, dataset_json, checkpoint_path, callback):
+def train(config_json, dataset_json, checkpoint_path, callback, model_path=""):
     """Synchronous — call this from a background thread on the Kotlin side.
 
     `callback` is a Kotlin object with a method `onProgress(json_str: str)`,
     invoked after every optimizer step and once more (terminal state) on
-    completion, cancellation, or failure.
+    completion, cancellation, or failure. `model_path`, if non-empty, is a
+    local GGUF file path to load real weights from (see module docstring).
     """
     global _cancelled
     _cancelled = False
@@ -117,27 +153,32 @@ def train(config_json, dataset_json, checkpoint_path, callback):
     batch_size = max(1, int(config.get("batchSize", 2)))
     learning_rate = float(config.get("learningRate", 1.5e-4))
 
-    tok = ByteTokenizer()
-
     emit(state="PREPARING", epoch=0, totalEpochs=epochs, step=0, totalSteps=0, loss=0.0)
 
     try:
-        model = TinyTransformerLM(
-            vocab_size=tok.vocab_size, d_model=D_MODEL, num_heads=NUM_HEADS,
-            d_ff=D_FF, num_layers=NUM_LAYERS, max_seq_len=MAX_SEQ_LEN,
-        )
-        # LoRALinear requires rank <= min(in_features, out_features); every
-        # attention projection here is (D_MODEL, D_MODEL), so D_MODEL is the cap.
-        _inject_lora(model, rank=min(rank, D_MODEL), alpha=alpha)
+        if model_path and os.path.exists(model_path):
+            try:
+                model, tok, attn_attr = _load_real_model(model_path)
+                max_seq_len = model.cfg["max_seq_len"]
+            except Exception as e:
+                emit(state="FAILED", epoch=0, totalEpochs=epochs, step=0, totalSteps=0,
+                     loss=0.0, message="Could not load %s as a GGUF model: %s: %s" %
+                     (os.path.basename(model_path), type(e).__name__, e))
+                return
+        else:
+            model, tok, attn_attr = _build_demo_model()
+            max_seq_len = DEMO_MAX_SEQ_LEN
+
+        _inject_lora(model, attn_attr, rank=rank, alpha=alpha)
         params = adapter_parameters(model)
         opt = optim.AdamW(params, lr=learning_rate)
 
         encoded = []
         for sample in samples:
             ids = tok.encode(_format_sample(sample), add_bos=True, add_eos=True)
-            encoded.append(ids[:MAX_SEQ_LEN])
+            encoded.append(ids[:max_seq_len])
         max_len = max(len(ids) for ids in encoded)
-        pad_id = tok.PAD_ID
+        pad_id = _pad_id(tok)
 
         def padded(ids):
             return ids + [pad_id] * (max_len - len(ids))

@@ -23,10 +23,12 @@ import kotlinx.serialization.json.putJsonObject
 /**
  * Runs LoRA fine-tuning through the real termux-train library (pinned to
  * 1.1.3 in app/build.gradle.kts — see the comment there for why) via
- * Chaquopy, training the small demo transformer defined in
- * app/src/main/python/xload_trainer.py. See that file's docstring for
- * exactly what this proves and what it doesn't (it is not yet loading the
- * user's selected real base model's weights).
+ * Chaquopy, delegating to app/src/main/python/xload_trainer.py. When
+ * [TrainingConfig.modelFilePath] points at an importable GGUF file, that
+ * file's real (dequantized) weights and its own embedded tokenizer are used
+ * (Qwen2 architecture family only so far); otherwise xload_trainer.py falls
+ * back to termux-train's small bundled demo transformer. See that file's
+ * docstring for exactly what each path proves.
  */
 class TermuxTrainEngine(private val context: Context) : TrainingEngine {
     private val json = Json { ignoreUnknownKeys = true }
@@ -63,7 +65,10 @@ class TermuxTrainEngine(private val context: Context) : TrainingEngine {
 
         withContext(Dispatchers.IO) {
             runCatching {
-                module.callAttr("train", configJson, datasetJson, checkpointPath, callback)
+                module.callAttr(
+                    "train", configJson, datasetJson, checkpointPath, callback,
+                    config.modelFilePath ?: "",
+                )
             }.onFailure { e ->
                 trySend(
                     TrainingProgress(

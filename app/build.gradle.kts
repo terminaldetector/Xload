@@ -33,6 +33,14 @@ android {
                 // verified end-to-end (LoRA injection, training, SafeTensors
                 // checkpoint round-trip) in a local venv against this exact pin.
                 install("termux-train==1.1.3")
+                // gguf: the llama.cpp project's own reference GGUF reader and
+                // (critically) dequantize() for every GGML quant type -- used
+                // instead of hand-rolling quantization math. Pure-Python wheel,
+                // so it doesn't need a per-ABI native build like most of the
+                // ML ecosystem does. numpy is its hard dependency and also
+                // unlocks termux-train's own faster "accelerated" backend.
+                install("gguf==0.19.0")
+                install("numpy>=1.20.0")
             }
         }
     }

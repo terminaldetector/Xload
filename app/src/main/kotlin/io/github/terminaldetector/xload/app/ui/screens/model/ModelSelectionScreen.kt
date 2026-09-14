@@ -31,6 +31,7 @@ import io.github.terminaldetector.xload.core.model.BaseModel
 fun ModelSelectionScreen(viewModel: TrainingSessionViewModel, onNext: () -> Unit) {
     val selectedModel by viewModel.selectedModel.collectAsState()
     val importedModelFileName by viewModel.importedModelFileName.collectAsState()
+    val importedModelFilePath by viewModel.importedModelFilePath.collectAsState()
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { viewModel.onModelFilePicked(it) }
@@ -85,7 +86,20 @@ fun ModelSelectionScreen(viewModel: TrainingSessionViewModel, onNext: () -> Unit
                 onClick = { filePicker.launch(arrayOf("*/*")) },
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(importedModelFileName ?: "Импортировать файл модели (GGUF / SafeTensors)")
+                Text(importedModelFileName ?: "Импортировать файл модели (GGUF)")
+            }
+            when {
+                importedModelFileName == null -> Unit
+                importedModelFilePath != null -> Text(
+                    "Импортирован и будет использован для реального дообучения (Qwen2-архитектура).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                else -> Text(
+                    "Копирование файла…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             Button(

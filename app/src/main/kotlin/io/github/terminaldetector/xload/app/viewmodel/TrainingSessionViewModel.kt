@@ -12,11 +12,14 @@ import io.github.terminaldetector.xload.core.model.BaseModel
 import io.github.terminaldetector.xload.core.model.LoraConfig
 import io.github.terminaldetector.xload.core.model.TrainingConfig
 import io.github.terminaldetector.xload.core.model.TrainingProgress
+import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Holds the whole training wizard's state (model -> dataset -> hyperparameters ->
@@ -25,8 +28,11 @@ import kotlinx.coroutines.launch
  * Uses [TermuxTrainEngine] (real termux-train via Chaquopy) rather than the
  * pure-Kotlin [io.github.terminaldetector.xload.core.engine.reference.ReferenceLoraEngine] —
  * see that class and app/src/main/python/xload_trainer.py for what each does
- * and doesn't prove. AndroidViewModel (not plain ViewModel) because the
- * engine needs a Context for Chaquopy and for where to write the checkpoint.
+ * and doesn't prove. An imported GGUF file is copied into app-private storage
+ * (see [onModelFilePicked]) and its path threaded through [TrainingConfig] so
+ * the engine can load real weights instead of a demo architecture.
+ * AndroidViewModel (not plain ViewModel) because the engine needs a Context
+ * for Chaquopy, for the copy above, and for where to write the checkpoint.
  */
 class TrainingSessionViewModel(application: Application) : AndroidViewModel(application) {
     private val trainingEngine: TrainingEngine = TermuxTrainEngine(application)
@@ -36,6 +42,13 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
 
     private val _importedModelFileName = MutableStateFlow<String?>(null)
     val importedModelFileName: StateFlow<String?> = _importedModelFileName.asStateFlow()
+
+    private val _importedModelFilePath = MutableStateFlow<String?>(null)
+    /** Local filesystem copy of the picked file, once the copy finishes; null while
+     *  copying or if nothing has been imported yet (Python needs a real path, not a
+     *  content:// Uri, and SAF-granted read access to the original Uri isn't durable
+     *  across process death, so the file is copied into app-private storage once). */
+    val importedModelFilePath: StateFlow<String?> = _importedModelFilePath.asStateFlow()
 
     private val _loraConfig = MutableStateFlow(LoraConfig())
     val loraConfig: StateFlow<LoraConfig> = _loraConfig.asStateFlow()
@@ -57,7 +70,22 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
     }
 
     fun onModelFilePicked(uri: Uri) {
+        val context = getApplication<Application>()
         _importedModelFileName.value = uri.lastPathSegment ?: uri.toString()
+        _importedModelFilePath.value = null
+        viewModelScope.launch {
+            val localPath = withContext(Dispatchers.IO) {
+                runCatching {
+                    val modelsDir = File(context.filesDir, "models").apply { mkdirs() }
+                    val dest = File(modelsDir, "imported-${System.currentTimeMillis()}.gguf")
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        dest.outputStream().use { output -> input.copyTo(output) }
+                    } ?: return@runCatching null
+                    dest.absolutePath
+                }.getOrNull()
+            }
+            _importedModelFilePath.value = localPath
+        }
     }
 
     fun loadDataset(content: String) {
@@ -85,6 +113,7 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
             gradientAccumulationSteps = params.gradientAccumulationSteps,
             epochs = params.epochs,
             learningRate = params.learningRate,
+            modelFilePath = _importedModelFilePath.value,
         )
 
         trainingJob?.cancel()
@@ -104,6 +133,7 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
         trainingJob?.cancel()
         _selectedModel.value = null
         _importedModelFileName.value = null
+        _importedModelFilePath.value = null
         _loraConfig.value = LoraConfig()
         _trainingParams.value = TrainingHyperparams()
         _datasetResult.value = null

@@ -7,6 +7,11 @@ data class TrainingConfig(
     val gradientAccumulationSteps: Int = 4,
     val epochs: Int = 3,
     val learningRate: Float = 1.5e-4f,
+    /** Local filesystem path to an imported GGUF weights file, if any. Engines
+     *  that only train a synthetic/demo architecture (e.g. ReferenceLoraEngine)
+     *  ignore this; a real-weights engine uses it instead of [baseModel]'s name
+     *  to decide what to actually load. */
+    val modelFilePath: String? = null,
 ) {
     init {
         require(batchSize in 1..64) { "batchSize must be in 1..64, was $batchSize" }
