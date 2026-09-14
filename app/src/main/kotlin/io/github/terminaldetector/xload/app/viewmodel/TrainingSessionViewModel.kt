@@ -5,14 +5,18 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.terminaldetector.xload.app.engine.TermuxInferenceEngine
+import io.github.terminaldetector.xload.app.engine.TermuxStyleAnalysisEngine
 import io.github.terminaldetector.xload.app.engine.TermuxTrainEngine
 import io.github.terminaldetector.xload.core.dataset.DatasetParseResult
 import io.github.terminaldetector.xload.core.dataset.JsonlDatasetParser
 import io.github.terminaldetector.xload.core.engine.InferenceEngine
+import io.github.terminaldetector.xload.core.engine.StyleAnalysisEngine
 import io.github.terminaldetector.xload.core.engine.TrainingEngine
 import io.github.terminaldetector.xload.core.model.BaseModel
 import io.github.terminaldetector.xload.core.model.GenerationState
 import io.github.terminaldetector.xload.core.model.LoraConfig
+import io.github.terminaldetector.xload.core.model.StyleAnalysisProgress
+import io.github.terminaldetector.xload.core.model.StyleAnalysisState
 import io.github.terminaldetector.xload.core.model.TrainingConfig
 import io.github.terminaldetector.xload.core.model.TrainingProgress
 import java.io.File
@@ -40,6 +44,7 @@ import kotlinx.coroutines.withContext
 class TrainingSessionViewModel(application: Application) : AndroidViewModel(application) {
     private val trainingEngine: TrainingEngine = TermuxTrainEngine(application)
     private val inferenceEngine: InferenceEngine = TermuxInferenceEngine()
+    private val styleAnalysisEngine: StyleAnalysisEngine = TermuxStyleAnalysisEngine()
 
     private val _selectedModel = MutableStateFlow<BaseModel?>(null)
     val selectedModel: StateFlow<BaseModel?> = _selectedModel.asStateFlow()
@@ -83,9 +88,19 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
     private val _isAnalyzingPersonality = MutableStateFlow(false)
     val isAnalyzingPersonality: StateFlow<Boolean> = _isAnalyzingPersonality.asStateFlow()
 
+    private val _styleAnalysisProgress = MutableStateFlow<StyleAnalysisProgress?>(null)
+    /** Latest event from [analyzeStyle] — while CALIBRATING carries [StyleAnalysisProgress.round]/
+     *  [StyleAnalysisProgress.totalRounds] for progress display; once COMPLETED carries the full
+     *  [StyleAnalysisProgress.result]. Null before the first run. */
+    val styleAnalysisProgress: StateFlow<StyleAnalysisProgress?> = _styleAnalysisProgress.asStateFlow()
+
+    private val _isAnalyzingStyle = MutableStateFlow(false)
+    val isAnalyzingStyle: StateFlow<Boolean> = _isAnalyzingStyle.asStateFlow()
+
     private var trainingJob: Job? = null
     private var generationJob: Job? = null
     private var analysisJob: Job? = null
+    private var styleAnalysisJob: Job? = null
 
     fun selectModel(model: BaseModel) {
         _selectedModel.value = model
@@ -230,12 +245,41 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
         inferenceEngine.cancel()
     }
 
+    /** Builds [styleAnalysisProgress]'s structured stylometric map from the loaded dataset — see
+     *  [StyleAnalysisEngine] and app/src/main/python/fbdp_engine.py for what this does and
+     *  doesn't prove (a port of the user's own prior FBDP work, not FractalMind/RAPTOR itself;
+     *  see README for the known gaps — no real per-cluster LLM summary yet, chief among them).
+     *  Needs only a loaded dataset, not a completed training run, and touches no model at all. */
+    fun analyzeStyle() {
+        val samples = _datasetResult.value?.samples ?: return
+        if (samples.isEmpty() || _isAnalyzingStyle.value) return
+
+        _styleAnalysisProgress.value = null
+        _isAnalyzingStyle.value = true
+
+        styleAnalysisJob?.cancel()
+        styleAnalysisJob = viewModelScope.launch {
+            styleAnalysisEngine.analyze(dataset = samples).collect { progress ->
+                _styleAnalysisProgress.value = progress
+                if (progress.state != StyleAnalysisState.CALIBRATING) {
+                    _isAnalyzingStyle.value = false
+                }
+            }
+        }
+    }
+
+    fun cancelStyleAnalysis() {
+        styleAnalysisEngine.cancel()
+    }
+
     fun reset() {
         trainingEngine.cancel()
         trainingJob?.cancel()
         inferenceEngine.cancel()
         generationJob?.cancel()
         analysisJob?.cancel()
+        styleAnalysisEngine.cancel()
+        styleAnalysisJob?.cancel()
         _selectedModel.value = null
         _importedModelFileName.value = null
         _importedModelFilePath.value = null
@@ -248,11 +292,14 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
         _personalityPortrait.value = null
         _personalityError.value = null
         _isAnalyzingPersonality.value = false
+        _styleAnalysisProgress.value = null
+        _isAnalyzingStyle.value = false
     }
 
     override fun onCleared() {
         trainingEngine.cancel()
         inferenceEngine.cancel()
+        styleAnalysisEngine.cancel()
     }
 }
 

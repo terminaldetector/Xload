@@ -37,6 +37,7 @@ import io.github.terminaldetector.xload.app.ui.components.StepScaffold
 import io.github.terminaldetector.xload.app.viewmodel.ChatMessage
 import io.github.terminaldetector.xload.app.viewmodel.ChatRole
 import io.github.terminaldetector.xload.app.viewmodel.TrainingSessionViewModel
+import io.github.terminaldetector.xload.core.model.StyleAnalysisState
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -76,6 +77,7 @@ fun TestExportScreen(viewModel: TrainingSessionViewModel, onRestart: () -> Unit)
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             PersonalityPortraitCard(viewModel)
+            StyleAnalysisCard(viewModel)
 
             if (checkpointPath != null) {
                 Card(modifier = Modifier.fillMaxWidth()) {
@@ -165,6 +167,81 @@ private fun PersonalityPortraitCard(viewModel: TrainingSessionViewModel) {
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(if (portrait != null) "Построить заново" else "Построить портрет")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StyleAnalysisCard(viewModel: TrainingSessionViewModel) {
+    val datasetResult by viewModel.datasetResult.collectAsState()
+    val progress by viewModel.styleAnalysisProgress.collectAsState()
+    val isAnalyzing by viewModel.isAnalyzingStyle.collectAsState()
+    val samples = datasetResult?.samples ?: emptyList()
+
+    if (samples.isEmpty()) return
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Стилевой анализ (FBDP, пробник)", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Настоящая статистика по примерам датасета вместо текстовой сводки выше: " +
+                    "TF-IDF/KMeans-кластеры по темам, стилевой центроид (15 метрик — длина " +
+                    "фраз, пунктуация, хеджи и т.д.) у каждого кластера, латеральные связи " +
+                    "между разнотемными кластерами, написанными одним и тем же голосом, и " +
+                    "оценка реконструкции на отложенных примерах. Портировано из уже " +
+                    "существовавшей у пользователя наработки (см. README) — не FractalMind " +
+                    "и не RAPTOR как есть, кластеры пока без настоящего LLM-резюме.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            when (progress?.state) {
+                StyleAnalysisState.CALIBRATING -> Text(
+                    "Калибровка: раунд ${progress?.round} из ${progress?.totalRounds}…",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                StyleAnalysisState.FAILED -> Text(
+                    "Ошибка: ${progress?.message}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                StyleAnalysisState.COMPLETED -> progress?.result?.let { result ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            "Реконструкция: %.4f · связей между кластерами: %d · раундов: %d"
+                                .format(result.reconstructionScore, result.edges.size, result.roundsCompleted),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        result.clusters.forEach { cluster ->
+                            Text(
+                                "· ${cluster.id}: ${cluster.size} примеров — ${cluster.topTerms.joinToString(", ")}",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        if (result.topStyleFeatures.isNotEmpty()) {
+                            Text(
+                                "Ведущие стилевые черты: " +
+                                    result.topStyleFeatures.joinToString(", ") { "${it.feature} (${"%.2f".format(it.weight)})" },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
+                StyleAnalysisState.CANCELLED, null -> Unit
+            }
+
+            if (isAnalyzing) {
+                OutlinedButton(onClick = { viewModel.cancelStyleAnalysis() }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Стоп")
+                }
+            } else {
+                OutlinedButton(
+                    onClick = { viewModel.analyzeStyle() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (progress?.result != null) "Построить заново" else "Построить стилевой анализ")
                 }
             }
         }
