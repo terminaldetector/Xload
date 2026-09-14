@@ -27,6 +27,17 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # Separate from the per-ABI Python interpreters Chaquopy bundles into the
+      # APK for the *device* -- this is the build-machine interpreter Chaquopy
+      # itself shells out to (to run pip, etc.) while assembling the app, and it
+      # must match app/build.gradle.kts's `chaquopy.defaultConfig.version`
+      # ("3.11"). ubuntu-latest's preinstalled python3 doesn't satisfy this on
+      # its own (confirmed by the previous run: "Couldn't find Python 3.11").
+      - name: Set up build-time Python 3.11 (required by Chaquopy)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
