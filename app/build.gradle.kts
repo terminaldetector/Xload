@@ -22,33 +22,6 @@ android {
             // that matter for real devices + the emulator to limit APK size.
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }
-
-        python {
-            version = "3.11"
-            pip {
-                // Pinned deliberately: termux-train 1.1.4/1.1.5 added a hard
-                // dependency on `ameva-component-sdk`, which is not published
-                // on PyPI (verified 404) and makes those versions uninstallable.
-                // 1.1.3 is the newest version that installs and runs cleanly —
-                // verified end-to-end (LoRA injection, training, SafeTensors
-                // checkpoint round-trip) in a local venv against this exact pin.
-                install("termux-train==1.1.3")
-                // gguf: the llama.cpp project's own reference GGUF reader and
-                // (critically) dequantize() for every GGML quant type -- used
-                // instead of hand-rolling quantization math. Pure-Python wheel,
-                // so it doesn't need a per-ABI native build like most of the
-                // ML ecosystem does. numpy is its hard dependency and also
-                // unlocks termux-train's own faster "accelerated" backend.
-                install("gguf==0.19.0")
-                install("numpy>=1.20.0")
-            }
-        }
-    }
-
-    sourceSets {
-        getByName("main") {
-            python.srcDirs("src/main/python")
-        }
     }
 
     buildTypes {
@@ -72,6 +45,41 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+}
+
+// Chaquopy 17.x configures Python through its own top-level `chaquopy { }`
+// extension rather than nesting inside `android { }`. Confirmed against the
+// plugin's own demo app (github.com/chaquo/chaquopy/blob/master/demo/app/build.gradle.kts)
+// since chaquo.com itself is unreachable from this sandbox to check the docs
+// directly. The older android.defaultConfig.python{} / sourceSets.python.srcDirs()
+// nesting this file used before doesn't exist in current versions and fails
+// Kotlin DSL compilation ("Unresolved reference: python") -- caught by the
+// first real GitHub Actions build, since :app was never built end to end here.
+chaquopy {
+    defaultConfig {
+        version = "3.11"
+        pip {
+            // Pinned deliberately: termux-train 1.1.4/1.1.5 added a hard
+            // dependency on `ameva-component-sdk`, which is not published
+            // on PyPI (verified 404) and makes those versions uninstallable.
+            // 1.1.3 is the newest version that installs and runs cleanly —
+            // verified end-to-end (LoRA injection, training, SafeTensors
+            // checkpoint round-trip) in a local venv against this exact pin.
+            install("termux-train==1.1.3")
+            // gguf: the llama.cpp project's own reference GGUF reader and
+            // (critically) dequantize() for every GGML quant type -- used
+            // instead of hand-rolling quantization math. Pure-Python wheel,
+            // so it doesn't need a per-ABI native build like most of the
+            // ML ecosystem does. numpy is its hard dependency and also
+            // unlocks termux-train's own faster "accelerated" backend.
+            install("gguf==0.19.0")
+            install("numpy>=1.20.0")
+        }
+    }
+}
+
+chaquopy.sourceSets.getByName("main") {
+    srcDir("src/main/python")
 }
 
 dependencies {
