@@ -4,11 +4,14 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.github.terminaldetector.xload.app.engine.TermuxInferenceEngine
 import io.github.terminaldetector.xload.app.engine.TermuxTrainEngine
 import io.github.terminaldetector.xload.core.dataset.DatasetParseResult
 import io.github.terminaldetector.xload.core.dataset.JsonlDatasetParser
+import io.github.terminaldetector.xload.core.engine.InferenceEngine
 import io.github.terminaldetector.xload.core.engine.TrainingEngine
 import io.github.terminaldetector.xload.core.model.BaseModel
+import io.github.terminaldetector.xload.core.model.GenerationState
 import io.github.terminaldetector.xload.core.model.LoraConfig
 import io.github.terminaldetector.xload.core.model.TrainingConfig
 import io.github.terminaldetector.xload.core.model.TrainingProgress
@@ -36,6 +39,7 @@ import kotlinx.coroutines.withContext
  */
 class TrainingSessionViewModel(application: Application) : AndroidViewModel(application) {
     private val trainingEngine: TrainingEngine = TermuxTrainEngine(application)
+    private val inferenceEngine: InferenceEngine = TermuxInferenceEngine()
 
     private val _selectedModel = MutableStateFlow<BaseModel?>(null)
     val selectedModel: StateFlow<BaseModel?> = _selectedModel.asStateFlow()
@@ -62,7 +66,14 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
     private val _trainingProgress = MutableStateFlow<TrainingProgress?>(null)
     val trainingProgress: StateFlow<TrainingProgress?> = _trainingProgress.asStateFlow()
 
+    private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
+
+    private val _isGenerating = MutableStateFlow(false)
+    val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
+
     private var trainingJob: Job? = null
+    private var generationJob: Job? = null
 
     fun selectModel(model: BaseModel) {
         _selectedModel.value = model
@@ -128,9 +139,51 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
         trainingEngine.cancel()
     }
 
+    /** Sends [text] as a chat turn against the just-trained adapter (see [InferenceEngine] and
+     *  app/src/main/python/xload_inference.py for what this does and doesn't prove — in
+     *  particular: no KV-cache, so replies are capped at a short default length). Uses the same
+     *  [loraConfig] and imported GGUF file as training, since the checkpoint's adapter weights
+     *  were saved from a model built with exactly those. Requires a completed training run (a
+     *  real checkpoint on disk) — the UI only shows the chat card once that holds.
+     */
+    fun sendChatMessage(text: String) {
+        val checkpointPath = _trainingProgress.value?.checkpointPath ?: return
+        if (text.isBlank() || _isGenerating.value) return
+
+        _chatMessages.value = _chatMessages.value + ChatMessage(ChatRole.USER, text) +
+            ChatMessage(ChatRole.ASSISTANT, "")
+        _isGenerating.value = true
+
+        generationJob?.cancel()
+        generationJob = viewModelScope.launch {
+            inferenceEngine.generate(
+                lora = _loraConfig.value,
+                modelFilePath = _importedModelFilePath.value,
+                checkpointPath = checkpointPath,
+                prompt = text,
+            ).collect { progress ->
+                _chatMessages.value = _chatMessages.value.dropLast(1) +
+                    ChatMessage(
+                        role = ChatRole.ASSISTANT,
+                        text = progress.text,
+                        error = progress.message.takeIf { progress.state == GenerationState.FAILED },
+                    )
+                if (progress.state != GenerationState.GENERATING) {
+                    _isGenerating.value = false
+                }
+            }
+        }
+    }
+
+    fun cancelGeneration() {
+        inferenceEngine.cancel()
+    }
+
     fun reset() {
         trainingEngine.cancel()
         trainingJob?.cancel()
+        inferenceEngine.cancel()
+        generationJob?.cancel()
         _selectedModel.value = null
         _importedModelFileName.value = null
         _importedModelFilePath.value = null
@@ -138,9 +191,16 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
         _trainingParams.value = TrainingHyperparams()
         _datasetResult.value = null
         _trainingProgress.value = null
+        _chatMessages.value = emptyList()
+        _isGenerating.value = false
     }
 
     override fun onCleared() {
         trainingEngine.cancel()
+        inferenceEngine.cancel()
     }
 }
+
+enum class ChatRole { USER, ASSISTANT }
+
+data class ChatMessage(val role: ChatRole, val text: String, val error: String? = null)
