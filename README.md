@@ -136,9 +136,10 @@
    тихая порча — то есть именно то поведение, которое обещано в ограничениях ниже.
 
 Все эти проверки — реальные прогоны в локальном venv (`pip install termux-train==1.1.3
-gguf==0.19.0 numpy`, Python 3.11), а не чтение документации. Чего по-прежнему не
-было и не могло быть: сборки `:app` через Chaquopy на настоящем Android SDK/устройстве
-(см. «Сборка и запуск» ниже) и проверки на **настоящем** (не синтетическом) GGUF-файле.
+gguf==0.19.0 numpy`, Python 3.11), а не чтение документации. `:app` теперь и правда
+собирается через Chaquopy на настоящем Android SDK (CI, см. «Сборка и запуск» ниже),
+но чего по-прежнему нет — запуска на настоящем устройстве/эмуляторе и проверки на
+**настоящем** (не синтетическом) GGUF-файле.
 
 **Ограничения, которые стоит знать:**
 
@@ -496,28 +497,48 @@ interface StyleAnalysisEngine {
 ```
 
 `:app` требует Android SDK, а также доступ к **Google Maven** (`dl.google.com`,
-для Android Gradle Plugin и AndroidX/Compose) и к **Chaquopy Maven** (`chaquo.com`,
-для плагина и Python-рантайма Android) — откройте проект в Android Studio (Koala+),
-она сама подтянет SDK/AGP/Chaquopy. minSdk 30 (Android 11+), т.к. плану нужны
-NNAPI/Vulkan. Ничего из этого не было доступно в изолированной среде, где писался
-этот код (см. подробности выше) — `:core` (компилируется и тестируется через
-`./gradlew`, включая `StyleAnalysisEngine`/`StyleAnalysisParams`/`StyleAnalysisProgress`)
-и вся Python-логика (`xload_trainer.py`, `xload_inference.py`, `fbdp_engine.py`,
-`gguf_llama_family_model.py`, `llama_style_blocks.py`, `gguf_bpe.py`) реально
-протестированы в локальном venv, `:app` в целом — нет (Kotlin-код для чата/инференса/
-стилевого анализа проверен только внимательным ручным разбором типов и сверкой с уже
-работающими `TermuxTrainEngine`/`PyTrainingProgress`, не компиляцией); при первом
+для Android Gradle Plugin и AndroidX/Compose) и к Chaquopy (сам плагин
+`com.chaquo.python` резолвится через Gradle Plugin Portal, а per-ABI
+Python-рантайм для Android — отдельно, с `chaquo.com`) — откройте проект в
+Android Studio (Koala+), она сама подтянет SDK/AGP/Chaquopy. minSdk 30
+(Android 11+), т.к. плану нужны NNAPI/Vulkan. Ничего из этого не было доступно
+в изолированной среде, где писался этот код (см. подробности выше), поэтому до
+первого CI-прогона `:app` ни разу не собирался целиком — только `:core`
+(компилируется и тестируется через `./gradlew`, включая
+`StyleAnalysisEngine`/`StyleAnalysisParams`/`StyleAnalysisProgress`) и вся
+Python-логика (`xload_trainer.py`, `xload_inference.py`, `fbdp_engine.py`,
+`gguf_llama_family_model.py`, `llama_style_blocks.py`, `gguf_bpe.py`), реально
+протестированные в локальном venv. Первый CI-прогон (см. ниже) подтвердил, что
+`:app` действительно собирается целиком (это включает и Kotlin-код чата/
+инференса/стилевого анализа — до этого проверенный только ручным разбором
+типов, а не компиляцией) — но перед этим нашёл два реальных бага, которых
+ручной разбор не поймал: Chaquopy 17.x конфигурируется через отдельный
+top-level `chaquopy { }`-экстеншен, а не `android.defaultConfig.python { }`,
+как было написано по памяти/старой документации, и на этапе сборки Chaquopy
+требует Python 3.11 прямо на раннере (отдельно от Python, который упаковывается
+в APK под каждый ABI) — `ubuntu-latest` не даёт его «из коробки». Оба
+пофикшены. Чего CI по-прежнему не проверяет — реальный запуск на
+устройстве/эмуляторе (чат, тренировка, стилевой анализ вживую); при первом
 открытии в Android Studio возможны мелкие правки версий.
 
 **CI-сборка APK** (`.github/workflows/build.yml`) — то, чего изолированная песочница
 не позволяла проверить: собирает `:app` на GitHub-раннере (обычный доступ в интернет,
-`dl.google.com`/`chaquo.com` не заблокированы), прогоняет `:core:test`, затем
-`./gradlew :app:assembleDebug`, и кладёт APK в артефакты запуска (Actions → выбрать
-запуск → Artifacts → `xload-debug-apk`). Срабатывает на push/PR в `main` и вручную
-(`workflow_dispatch`). Debug-сборка (автоподпись debug-ключом, без релизного
-signing config) — то, что нужно для проверки, что весь код (Chaquopy/термукс-трейн
-плагин, конфигурация pip-зависимостей в `build.gradle.kts` и т.д.) действительно
-собирается, а не только компилируется по отдельности.
+`dl.google.com`/Gradle Plugin Portal/`chaquo.com` не заблокированы), ставит
+build-time Python 3.11 (`actions/setup-python`, см. выше зачем), прогоняет
+`:core:test`, затем `./gradlew :app:assembleDebug`, и кладёт APK в артефакты
+запуска (Actions → выбрать запуск → Artifacts → `xload-debug-apk`). Срабатывает
+на push/PR в `main` и вручную (`workflow_dispatch`). Debug-сборка (автоподпись
+debug-ключом, без релизного signing config) — то, что нужно для проверки, что
+весь код (Chaquopy/termux-train плагин, конфигурация pip-зависимостей в
+`build.gradle.kts` и т.д.) действительно собирается, а не только компилируется
+по отдельности.
+
+Подтверждено: [run #3](https://github.com/terminaldetector/Xload/actions/runs/34857276790)
+прошёл целиком (`:core:test` + `:app:assembleDebug` + upload) — первая в
+истории проекта успешная сборка `:app` от начала до конца, APK ~59.5 МБ (3 ABI
+× полный CPython от Chaquopy). Первые два прогона падали на багах, описанных
+выше — конкретный пример того, зачем этот CI вообще нужен, а не просто
+формальность.
 
 Проверить Python-логику локально (без Android) можно и так:
 
