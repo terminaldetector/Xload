@@ -13,8 +13,10 @@ Two model paths:
   builds the *real* architecture (RMSNorm/GQA/SwiGLU/RoPE, all parameterized
   from the file's own metadata) and loads its *real* dequantized weights,
   plus a tokenizer built from the file's own embedded vocab/merges. Only the
-  qwen2 and llama GGUF architecture families are supported so far (see
-  README) — Gemma-3/Phi-3-mini need their own building blocks.
+  qwen2, llama, and phi3 GGUF architecture families are supported so far
+  (see README) — Gemma-3 needs its own building blocks, and even for phi3
+  the file must use a gpt2-style byte-BPE tokenizer (load_gguf_model raises
+  a clear error instead if it doesn't; see that module's docstring).
 - otherwise (or if loading that file fails): falls back to
   termux_train.nn.transformer.TinyTransformerLM, termux-train's own small
   demo architecture, with its bundled ByteTokenizer. This is NOT the real

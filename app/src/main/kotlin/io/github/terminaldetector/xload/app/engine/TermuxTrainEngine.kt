@@ -26,7 +26,7 @@ import kotlinx.serialization.json.putJsonObject
  * Chaquopy, delegating to app/src/main/python/xload_trainer.py. When
  * [TrainingConfig.modelFilePath] points at an importable GGUF file, that
  * file's real (dequantized) weights and its own embedded tokenizer are used
- * (qwen2 and llama GGUF architecture families only so far); otherwise xload_trainer.py falls
+ * (qwen2, llama, and phi3 GGUF architecture families only so far); otherwise xload_trainer.py falls
  * back to termux-train's small bundled demo transformer. See that file's
  * docstring for exactly what each path proves.
  */

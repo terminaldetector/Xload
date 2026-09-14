@@ -4,8 +4,11 @@ none of these Llama-style building blocks, so gguf_llama_family_model.py needs
 them written by hand to assemble a real architecture instead of termux-train's
 own small demo transformer.
 
-Shared by Qwen2 and Llama (near-identical apart from q/k/v bias -- see
-LlamaStyleBlock's qkv_bias param). NOT shared by Gemma-3, which needs its own
+Shared by Qwen2, Llama, and Phi-3-mini (near-identical apart from q/k/v bias --
+see LlamaStyleBlock's qkv_bias param -- and Phi-3's fused qkv_proj/gate_up_proj
+tensors, which gguf_llama_family_model.py splits at load time so these block
+classes themselves don't need to know about the fusion at all). NOT shared by
+Gemma-3, which needs its own
 RMSNorm variant (`x*(1+weight)`, not `x*weight`), a non-head_dim attention
 scaling, alternating sliding/global attention layers with two different RoPE
 thetas, and GeGLU instead of SwiGLU -- see the README roadmap.
