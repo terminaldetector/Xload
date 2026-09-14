@@ -509,6 +509,16 @@ NNAPI/Vulkan. Ничего из этого не было доступно в и�
 работающими `TermuxTrainEngine`/`PyTrainingProgress`, не компиляцией); при первом
 открытии в Android Studio возможны мелкие правки версий.
 
+**CI-сборка APK** (`.github/workflows/build.yml`) — то, чего изолированная песочница
+не позволяла проверить: собирает `:app` на GitHub-раннере (обычный доступ в интернет,
+`dl.google.com`/`chaquo.com` не заблокированы), прогоняет `:core:test`, затем
+`./gradlew :app:assembleDebug`, и кладёт APK в артефакты запуска (Actions → выбрать
+запуск → Artifacts → `xload-debug-apk`). Срабатывает на push/PR в `main` и вручную
+(`workflow_dispatch`). Debug-сборка (автоподпись debug-ключом, без релизного
+signing config) — то, что нужно для проверки, что весь код (Chaquopy/термукс-трейн
+плагин, конфигурация pip-зависимостей в `build.gradle.kts` и т.д.) действительно
+собирается, а не только компилируется по отдельности.
+
 Проверить Python-логику локально (без Android) можно и так:
 
 ```bash
