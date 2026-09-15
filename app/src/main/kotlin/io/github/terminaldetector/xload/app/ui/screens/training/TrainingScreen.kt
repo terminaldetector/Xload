@@ -71,7 +71,9 @@ fun TrainingScreen(viewModel: TrainingSessionViewModel, onBack: () -> Unit, onNe
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) { Text("Назад") }
-                if (state == TrainingState.TRAINING || state == TrainingState.PREPARING) {
+                if (state == TrainingState.TRAINING || state == TrainingState.PREPARING ||
+                    state == TrainingState.PAUSED_THERMAL
+                ) {
                     Button(onClick = { viewModel.cancelTraining() }, modifier = Modifier.weight(1f)) {
                         Text("Остановить")
                     }
