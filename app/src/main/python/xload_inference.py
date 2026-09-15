@@ -30,16 +30,17 @@ Two entry points, sharing one token-by-token generation loop
 
 Known limitations, both deliberate scope cuts rather than oversights:
 - No KV-cache. TinyTransformerLM (the demo architecture) actually already
-  supports one (use_cache=/past_key_values= on its forward()), but
-  GQAAttention (llama_style_blocks.py, used by every real GGUF-loaded model)
-  does not -- adding it means teaching hand-written attention blocks to
-  concatenate cached K/V and apply RoPE at an arbitrary position_offset,
-  unverified without a real device to benchmark against. Rather than give
-  the demo path a fast KV-cached shortcut the real-weights path can't share
-  (inconsistent, confusing), both paths simply re-run the full forward pass
-  over the whole sequence-so-far on every new token. This is O(n^2) in the
-  generated length, so max_new_tokens is capped hard (MAX_NEW_TOKENS_CAP)
-  rather than left to grow unbounded.
+  supports one (use_cache=/past_key_values= on its forward()), but neither
+  hand-written real-weights attention class does -- GQAAttention
+  (llama_style_blocks.py, qwen2/llama/phi3) nor Gemma3Attention
+  (gemma3_blocks.py). Adding it means teaching them to concatenate cached
+  K/V and apply RoPE at an arbitrary position_offset, unverified without a
+  real device to benchmark against. Rather than give the demo path a fast
+  KV-cached shortcut the real-weights paths can't share (inconsistent,
+  confusing), all three simply re-run the full forward pass over the whole
+  sequence-so-far on every new token. This is O(n^2) in the generated
+  length, so max_new_tokens is capped hard (MAX_NEW_TOKENS_CAP) rather than
+  left to grow unbounded.
 - Sampling is plain temperature + top-k over the raw softmax -- no
   repetition penalty, no nucleus (top-p) sampling.
 """

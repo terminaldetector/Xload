@@ -10,13 +10,15 @@ has to agree on a JSON shape rather than Chaquopy's Java<->Python type mapping.
 
 Two model paths:
 - `model_path` given and loadable: gguf_llama_family_model.load_gguf_model()
-  builds the *real* architecture (RMSNorm/GQA/SwiGLU/RoPE, all parameterized
-  from the file's own metadata) and loads its *real* dequantized weights,
-  plus a tokenizer built from the file's own embedded vocab/merges. Only the
-  qwen2, llama, and phi3 GGUF architecture families are supported so far
-  (see README) — Gemma-3 needs its own building blocks, and even for phi3
-  the file must use a gpt2-style byte-BPE tokenizer (load_gguf_model raises
-  a clear error instead if it doesn't; see that module's docstring).
+  builds the *real* architecture (RMSNorm/GQA/SwiGLU or GeGLU/RoPE, all
+  parameterized from the file's own metadata) and loads its *real*
+  dequantized weights, plus a tokenizer built from the file's own embedded
+  vocab/merges. Only the qwen2, llama, phi3, and gemma3 GGUF architecture
+  families are supported so far (see README), and for all of them the file
+  must use a gpt2-style byte-BPE tokenizer (load_gguf_model raises a clear
+  error instead if it doesn't; see that module's and gguf_gemma3_model.py's
+  docstrings -- this is the gap most likely to actually bite for gemma3,
+  since real Gemma-3 checkpoints typically ship a SentencePiece tokenizer).
 - otherwise (or if loading that file fails): falls back to
   termux_train.nn.transformer.TinyTransformerLM, termux-train's own small
   demo architecture, with its bundled ByteTokenizer. This is NOT the real

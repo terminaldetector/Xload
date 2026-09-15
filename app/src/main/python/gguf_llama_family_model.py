@@ -19,13 +19,16 @@ missing bias load was added (see load_bias() below) -- load_bias() itself
 is architecture-agnostic (a no-op when the layer has no bias to begin with),
 only _ARCH_CONFIG's qkv_bias flag needs to be right per architecture.
 
-Gemma-3 is deliberately NOT in _ARCH_CONFIG: its RMSNorm uses `x*(1+weight)`
-rather than `x*weight`, its attention scaling is a config value
-(query_pre_attn_scalar) rather than 1/sqrt(head_dim), it alternates sliding-
-window and global attention layers with two different RoPE thetas, and its
-MLP is GeGLU rather than SwiGLU -- confirmed by reading HuggingFace
-transformers' own modeling_gemma3.py/configuration_gemma3.py source rather
-than from memory. None of LlamaStyleBlock fits it; see the README roadmap.
+Gemma-3 is deliberately NOT in _ARCH_CONFIG: its attention scaling isn't
+1/sqrt(head_dim) (only sometimes, for non-27B sizes), it alternates sliding-
+window and global attention layers with two different RoPE thetas, it has
+QK-norm, and its MLP is GeGLU rather than SwiGLU. None of LlamaStyleBlock
+fits it, so it gets its own module pair instead: gemma3_blocks.py (the
+building blocks, with a detailed docstring on every one of those
+differences, verified against llama.cpp's actual GGUF-consuming source) and
+gguf_gemma3_model.py (config/tensor loading, mirroring this module's own
+structure). load_gguf_model() below dispatches to it before ever consulting
+_ARCH_CONFIG.
 
 Phi-3-mini, by contrast, *does* fit LlamaStyleBlock/GQAAttention/SwiGLU/
 RMSNorm exactly (confirmed by reading modeling_phi3.py/configuration_phi3.py):
@@ -195,12 +198,16 @@ def _split_out_axis(arr_out_in, sizes, tensor_name):
 
 
 def supported_architectures():
-    return sorted(_ARCH_CONFIG)
+    return sorted(set(_ARCH_CONFIG) | {"gemma3"})
 
 
 def load_gguf_model(path):
     reader = GGUFReader(path)
     arch = _field_str(reader, "general.architecture")
+    if arch == "gemma3":
+        # Separate model family entirely -- see module docstring.
+        from gguf_gemma3_model import load_gemma3_model
+        return load_gemma3_model(reader)
     if arch not in _ARCH_CONFIG:
         raise ValueError(
             "Unsupported GGUF architecture %r (supported: %s)" % (arch, ", ".join(supported_architectures()))
