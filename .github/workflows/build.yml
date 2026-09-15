@@ -38,8 +38,21 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Google removed the legacy standalone "tools" package from the SDK
+      # repository manifest (external change, dated ~2026-09-14/15 -- this
+      # repo's own run #4 still succeeded with the action's untouched default
+      # a few hours before run #5 broke on it, and the same failure shows up
+      # across many unrelated projects' CI the same day: sdkmanager errors
+      # "Failed to find package 'tools'" and exits 1). The action's default
+      # `packages` input is literally "tools platform-tools" (its own
+      # action.yml) -- override it to drop just the removed package; our
+      # actual build doesn't use the legacy `tools` binaries at all (AGP
+      # resolves the specific platform/build-tools versions it needs itself,
+      # via cmdline-tools, once licenses are accepted).
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
