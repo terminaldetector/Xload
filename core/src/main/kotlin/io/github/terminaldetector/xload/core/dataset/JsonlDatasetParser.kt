@@ -49,7 +49,17 @@ object JsonlDatasetParser {
                     }
                 }
                 .onFailure { e ->
-                    errors += DatasetLineError(lineNumber, e.message ?: "Invalid JSON")
+                    // kotlinx.serialization's own message (e.g. "Fields [instruction,
+                    // response] are required ... but they were missing at path: $")
+                    // never shows what WAS on the line, which is the one thing that
+                    // actually explains a missing-field error -- the line parsed as
+                    // valid JSON, it just doesn't have those keys at the root (wrong
+                    // schema, e.g. "prompt"/"completion" instead of
+                    // "instruction"/"response"). Append a preview so that's visible
+                    // directly in the error list instead of requiring a hex-editor.
+                    val preview = if (line.length > 80) line.take(80) + "…" else line
+                    val reason = "${e.message ?: "Invalid JSON"} | line content: $preview"
+                    errors += DatasetLineError(lineNumber, reason)
                 }
         }
 

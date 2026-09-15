@@ -49,4 +49,19 @@ class JsonlDatasetParserTest {
         assertEquals(1, result.errors.size)
         assertEquals(1, result.errors[0].lineNumber)
     }
+
+    @Test
+    fun `wrong schema (valid json, missing required keys) includes a line preview`() {
+        // The exact shape reported from the app: syntactically valid JSON that uses a
+        // different key naming convention (e.g. an OpenAI-style prompt/completion
+        // dataset) instead of instruction/response. kotlinx.serialization's own
+        // message alone doesn't show what was actually on the line.
+        val content = "{\"prompt\": \"Say hi\", \"completion\": \"Hi!\"}"
+        val result = JsonlDatasetParser.parse(content)
+
+        assertEquals(0, result.samples.size)
+        assertEquals(1, result.errors.size)
+        assertTrue(result.errors[0].reason.contains("prompt"))
+        assertTrue(result.errors[0].reason.contains("completion"))
+    }
 }
