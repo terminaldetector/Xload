@@ -15,8 +15,10 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 /**
@@ -52,6 +54,9 @@ class TermuxInferenceEngine : InferenceEngine {
             putJsonObject("lora") {
                 put("rank", lora.rank)
                 put("alpha", lora.alpha)
+                putJsonArray("targetModules") {
+                    lora.targetModules.forEach { add(it) }
+                }
             }
             put("maxNewTokens", params.maxNewTokens)
             put("temperature", params.temperature)

@@ -10,10 +10,12 @@ internal data class PyGenerationProgress(
     val state: String,
     val text: String = "",
     val message: String? = null,
+    val errorCode: String? = null,
 ) {
     fun toGenerationProgress() = GenerationProgress(
         state = runCatching { GenerationState.valueOf(state) }.getOrDefault(GenerationState.FAILED),
         text = text,
         message = message,
+        errorCode = errorCode,
     )
 }
