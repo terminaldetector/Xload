@@ -42,11 +42,14 @@ Commits, oldest first:
   parity) — **Done**, verified, with one explicitly deferred sub-item (LoRA
   dropout — see "Risks and regressions").
 - **M3** (P0.5 memory preflight + thermal control + build/smoke test) —
-  **Partially done.** Thermal pause was already working (previous pass).
-  Memory preflight is implemented and unit-tested but is a rough estimate,
-  not a precise accounting (see its own doc comment). Real build: blocked
-  locally (see "Tests"); CI triggered, see that section for the actual
-  result. Smoke test on a real device: **not done** (no device available).
+  **Done**, except the real-device smoke test. Thermal pause was already
+  working (previous pass). Memory preflight is implemented and
+  unit-tested but is a rough estimate, not a precise accounting (see its
+  own doc comment). Real build: blocked locally (sandbox network policy,
+  see "Tests"), but **CI confirms a full, real, successful
+  `:app:assembleDebug` with an actual APK artifact** — see "Tests" for the
+  run and artifact links. Smoke test on a real device: **not done** (no
+  device available).
 - **M4–M8** (native quantized trainer, FBDP router, BigMoeOnEdge
   integration, sparse MoE R&D) — **Not started**, per the TZ's own
   ordering (M4 only after P0 is complete and real infrastructure is
@@ -134,26 +137,32 @@ manually against this branch instead of opening a PR (none was requested):
 - Run for `296a8fa` (Kotlin/Python changes, without the new CI step):
   https://github.com/terminaldetector/Xload/actions/runs/38970791849
 
-Per-step results for `64f70d5`'s run, as of this writing (job:
-https://github.com/terminaldetector/Xload/actions/runs/38971031804/job/117209174315) —
-**this is on GitHub's own unrestricted-network runner, independent of this
-sandbox's blocked local build**:
+Final per-step results for `64f70d5`'s run (job:
+https://github.com/terminaldetector/Xload/actions/runs/38971031804/job/117209174315,
+completed 2026-10-16T21:44:43Z) — **on GitHub's own unrestricted-network
+runner, independent of this sandbox's blocked local build**:
 
 | Step | Result |
 |---|---|
 | Install termux-train/gguf/numpy | ✅ success |
 | Run P0 verification scripts (65 checks) | ✅ success — confirms the local 40+25 result wasn't a sandbox-specific fluke |
-| `./gradlew :core:test` | ✅ success — **this is the real compiler/test confirmation the local sandbox couldn't give**; includes the new `MemoryPreflightTest` alongside all pre-existing core tests |
-| `./gradlew :app:assembleDebug` | ⏳ in progress at time of writing (Chaquopy's first multi-ABI Python bundling is slow on a cold cache) |
-| Upload APK | pending, depends on the above |
+| `./gradlew :core:test` | ✅ success — includes the new `MemoryPreflightTest` alongside all pre-existing core tests |
+| `./gradlew :app:assembleDebug` | ✅ success |
+| Upload APK | ✅ success |
 
-`:core:test` passing on CI resolves the "Kotlin changes unverified by a
-compiler" risk this report originally flagged from the local sandbox
-failure — they do compile and the full core test suite does pass. The APK
-assembly result (the one artifact-producing step, and the only one that
-would prove Chaquopy's actual Python bundling works end to end) was not
-yet known when this report was committed; check the job link above for the
-final state rather than trusting a guess here.
+**The whole job's conclusion is `success`.** A real debug APK artifact
+exists: `xload-debug-apk`, 62,430,576 bytes, sha256
+`5df99587245c401a18a0a58211b3cd8482122bd0a24de59ea083a2d587c8cc10`,
+uploaded 2026-10-16T21:44:41Z, retained until 2027-01-14 —
+https://github.com/terminaldetector/Xload/actions/runs/38971031804/artifacts/12077066307
+(GitHub Actions artifact download; requires repo access to fetch). This is
+the first time `:app:assembleDebug` has actually succeeded for this
+project end to end (the workflow's own header comment notes `dl.google.com`/
+`chaquo.com` were previously unreachable from every environment this
+project had been developed in) — Chaquopy's real multi-ABI Python bundling
+(termux-train + gguf + numpy, the exact pins this pass's checkpoint/
+inference code depends on) is confirmed to actually work, not just
+"should work."
 
 ## Device validation
 
@@ -178,16 +187,19 @@ runs, just not on the target architecture family.
   is non-zero, that would break every default-config training run — a much
   larger behavior change than this pass's "small atomic changes" scope
   allows. See "Next exact tasks".
-- **The `core` module is now compiler- and test-verified (via CI, not
-  locally)**: `:core:test` passed on GitHub's runner, covering `ModelMode`,
+- **Both the `core` and `app` modules are now compiler-verified (via CI,
+  not locally)**: `:core:test` passed (covering `ModelMode`,
   `TrainingConfig`, `TrainingProgress`, `GenerationProgress`, `BaseModel`,
-  and the new `MemoryPreflight`/`MemoryPreflightTest`. **The `app` module's
-  engine classes are not yet confirmed** — `TermuxTrainEngine.kt`,
+  and the new `MemoryPreflight`/`MemoryPreflightTest`), and
+  `:app:assembleDebug` passed too, which compiles `TermuxTrainEngine.kt`,
   `TermuxInferenceEngine.kt`, `TrainingSessionViewModel.kt`,
-  `PyTrainingProgress.kt`, `PyGenerationProgress.kt` were reviewed by hand
-  (types, imports, call-site arity) but only `:app:assembleDebug` actually
-  compiles them, and that step was still running when this report was
-  committed. Check the CI job link above for the real result.
+  `PyTrainingProgress.kt`, and `PyGenerationProgress.kt` and bundles the
+  real Python side via Chaquopy. This was reviewed by hand first (types,
+  imports, call-site arity) and CI then confirmed it actually compiles and
+  packages — see "Tests" for the artifact link. Note what this does
+  *not* cover: no instrumented/UI test ran, so the Compose screens that
+  consume these engines (`TrainingScreen.kt` et al.) are still only
+  reviewed by hand, not test-verified.
 - **`MemoryPreflight`'s estimate is deliberately rough.** It derives a
   LoRA-layer-width proxy from `paramCountBillions / targetModules.size`
   rather than the GGUF file's real `d_model`/`numLayers`/`dFf` (not
