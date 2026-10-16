@@ -51,6 +51,17 @@ enum class BaseModel(
         paramCountBillions = 3.8,
         defaultQuantization = Quantization.Q4_K_M,
         minRamMb = 6144,
-        targetModules = listOf("qkv_proj", "o_proj", "gate_up_proj", "down_proj"),
+        // NOT "qkv_proj"/"gate_up_proj": those are the GGUF *file's* fused
+        // on-disk tensor names (attn_qkv.weight, ffn_up.weight), which
+        // gguf_llama_family_model.py's _split_out_axis() always unfuses at
+        // load time into separate Parameters -- GQAAttention/SwiGLU (the
+        // same Python classes every llama-family architecture shares) only
+        // ever expose q_proj/k_proj/v_proj/out_proj and
+        // gate_proj/up_proj/down_proj, uniformly, regardless of how the
+        // source file stored them. The fused names here matched nothing on
+        // the live model, so Phi-3 LoRA target modules was a guaranteed
+        // INVALID_LORA_TARGETS failure (or, before that check existed, a
+        // silent zero-LoRA-applied no-op) for every training attempt.
+        targetModules = listOf("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"),
     ),
 }
