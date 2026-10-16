@@ -7,6 +7,12 @@ data class TrainingConfig(
     val gradientAccumulationSteps: Int = 4,
     val epochs: Int = 3,
     val learningRate: Float = 1.5e-4f,
+    /** Explicit choice between a real imported model and termux-train's demo
+     *  transformer -- see [ModelMode]'s own doc for why this isn't just
+     *  inferred from [modelFilePath]. Defaults to [ModelMode.DEMO]: an
+     *  unspecified mode must never accidentally mean "try to load a real
+     *  file," the same fail-closed reasoning as every other default here. */
+    val modelMode: ModelMode = ModelMode.DEMO,
     /** Local filesystem path to an imported GGUF weights file, if any. Engines
      *  that only train a synthetic/demo architecture (e.g. ReferenceLoraEngine)
      *  ignore this; a real-weights engine uses it instead of [baseModel]'s name
@@ -21,6 +27,9 @@ data class TrainingConfig(
         require(epochs in 1..100) { "epochs must be in 1..100, was $epochs" }
         require(learningRate in 1e-6f..1e-2f) {
             "learningRate must be in 1e-6..1e-2, was $learningRate"
+        }
+        require(modelMode != ModelMode.REAL_GGUF || !modelFilePath.isNullOrBlank()) {
+            "modelMode=REAL_GGUF requires a non-blank modelFilePath"
         }
     }
 

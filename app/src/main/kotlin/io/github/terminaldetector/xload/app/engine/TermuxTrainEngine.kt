@@ -1,10 +1,13 @@
 package io.github.terminaldetector.xload.app.engine
 
+import android.app.ActivityManager
 import android.content.Context
 import android.os.PowerManager
 import com.chaquo.python.Python
+import io.github.terminaldetector.xload.core.engine.MemoryPreflight
 import io.github.terminaldetector.xload.core.engine.TrainingEngine
 import io.github.terminaldetector.xload.core.model.DatasetSample
+import io.github.terminaldetector.xload.core.model.ModelMode
 import io.github.terminaldetector.xload.core.model.TrainingConfig
 import io.github.terminaldetector.xload.core.model.TrainingProgress
 import io.github.terminaldetector.xload.core.model.TrainingState
@@ -17,8 +20,10 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 /**
@@ -92,19 +97,57 @@ class TermuxTrainEngine(private val context: Context) : TrainingEngine {
         }
     }
 
+    /**
+     * "Warn and suggest reducing seq/microbatch... rather than hitting OOM
+     * first" (P0.5) -- a rough estimate (see [MemoryPreflight]'s own
+     * doc comment for why it's rough, not a real per-tensor accounting)
+     * compared against the device's actual currently-available memory.
+     * Returns null when it's not obviously going to be a problem, or when
+     * ActivityManager isn't available to ask (never blocks training on
+     * that -- an estimate that can't be checked is not the same as one
+     * that's confirmed fine, but refusing to train over it would be worse).
+     */
+    private fun memoryWarningOrNull(config: TrainingConfig): String? {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return null
+        val info = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(info)
+
+        val estimate = MemoryPreflight.estimate(config.baseModel, config.lora, config.modelMode)
+        if (!MemoryPreflight.likelyExceedsAvailableMemory(estimate, info.availMem)) return null
+        return "Оценочно нужно ~%dМБ, свободно ~%dМБ — возможна нехватка памяти. ".format(
+            estimate.totalMb, info.availMem / (1024 * 1024),
+        ) + "Попробуйте уменьшить batchSize или ранг LoRA."
+    }
+
     override fun train(config: TrainingConfig, dataset: List<DatasetSample>): Flow<TrainingProgress> = callbackFlow {
         val module = Python.getInstance().getModule("xload_trainer")
         cancelledForThermalWait = false
         cancelRequested = { module.callAttr("cancel") }
 
+        memoryWarningOrNull(config)?.let { warning ->
+            trySend(
+                TrainingProgress(
+                    state = TrainingState.PREPARING, epoch = 0, totalEpochs = config.epochs,
+                    step = 0, totalSteps = 0, loss = 0f, message = warning,
+                ),
+            )
+        }
+
         val configJson = buildJsonObject {
+            put("schemaVersion", 2)
             putJsonObject("lora") {
                 put("rank", config.lora.rank)
                 put("alpha", config.lora.alpha)
+                put("dropout", config.lora.dropout)
+                putJsonArray("targetModules") {
+                    config.lora.targetModules.forEach { add(it) }
+                }
             }
             put("epochs", config.epochs)
             put("batchSize", config.batchSize)
+            put("gradientAccumulationSteps", config.gradientAccumulationSteps)
             put("learningRate", config.learningRate)
+            put("modelMode", if (config.modelMode == ModelMode.REAL_GGUF) "real_gguf" else "demo")
         }.toString()
 
         val datasetJson = json.encodeToString(ListSerializer(DatasetSample.serializer()), dataset)

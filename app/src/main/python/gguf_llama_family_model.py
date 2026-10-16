@@ -147,6 +147,11 @@ def _field_float(reader, key, default=None):
 
 def read_config(reader, arch):
     return {
+        # Checkpoint metadata (xload_trainer.train()) reports this verbatim --
+        # load_gguf_model() used to discard `arch` once it had picked the
+        # right model class, leaving no honest way to record which GGUF
+        # architecture a saved adapter was actually trained against.
+        "architecture": arch,
         "vocab_size": _field_int(reader, f"{arch}.vocab_size")
         or len(reader.get_field("tokenizer.ggml.tokens").data),
         "d_model": _field_int(reader, f"{arch}.embedding_length"),
