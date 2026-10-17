@@ -15,6 +15,9 @@ internal data class PyTrainingProgress(
     val loss: Float,
     val etaSeconds: Long? = null,
     val message: String? = null,
+    val errorCode: String? = null,
+    val microStep: Int? = null,
+    val totalMicroSteps: Int? = null,
     val checkpointPath: String? = null,
 ) {
     fun toTrainingProgress(totalEpochsFallback: Int) = TrainingProgress(
@@ -26,6 +29,9 @@ internal data class PyTrainingProgress(
         loss = loss,
         etaSeconds = etaSeconds,
         message = message,
+        errorCode = errorCode,
+        microStep = microStep,
+        totalMicroSteps = totalMicroSteps,
         checkpointPath = checkpointPath,
     )
 }

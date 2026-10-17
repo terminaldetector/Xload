@@ -8,7 +8,7 @@ Two entry points, sharing one token-by-token generation loop
 (_run_generation_loop):
 - generate(): a chat reply through the trained adapter. Reuses
   xload_trainer.py's model-building helpers (_build_demo_model,
-  _load_real_model, _inject_lora, _format_sample) rather than duplicating
+  _load_real_model, _inject_lora, _format_prompt) rather than duplicating
   them, so "the model this replies with" is built exactly the same way --
   same architecture, same LoRA injection given the same (rank, alpha) -- as
   "the model that was trained": termux_train.checkpoint.lora_io.load_lora_adapter()
@@ -56,10 +56,12 @@ from termux_train.tensor import tensor
 
 from xload_trainer import (
     _build_demo_model,
-    _format_sample,
+    _classify_load_error,
+    _format_prompt,
     _inject_lora,
     _load_real_model,
     _prefer_numpy_backend,
+    _sha256_file,
 )
 
 # No KV-cache (see module docstring) -- every generated token re-runs a full
@@ -134,20 +136,52 @@ def _sample_next_id(logits_row, temperature, top_k):
 
 
 def _load_base_model(model_path):
-    if model_path and os.path.exists(model_path):
-        model, tok, attn_attr = _load_real_model(model_path)
-        max_seq_len = model.cfg["max_seq_len"]
-    else:
+    """`model_path` empty -> demo (legitimate: the training run this is
+    reproducing chose demo mode too). `model_path` non-empty but missing/
+    unloadable must NOT fall through to demo -- that would silently answer
+    with TinyTransformerLM's output and present it as "the trained model"
+    (exactly what the TZ's fail-closed rule forbids). The pre-fix version of
+    this function used `if model_path and os.path.exists(model_path)`, so a
+    path that existed at training time but was deleted/revoked (SAF
+    permission) since would quietly collapse into the `else` branch instead
+    of raising -- fixed by raising for that case instead of folding it into
+    the "no path at all" branch.
+    """
+    if not model_path:
         model, tok, attn_attr = _build_demo_model()
-        max_seq_len = model.max_seq_len
-    return model, tok, attn_attr, max_seq_len
+        return model, tok, attn_attr, model.max_seq_len, "demo", ""
+    if not os.path.exists(model_path):
+        raise FileNotFoundError("Model file not found: %s" % os.path.basename(model_path))
+    model, tok, attn_attr = _load_real_model(model_path)
+    architecture = model.cfg.get("architecture", "unknown")
+    return model, tok, attn_attr, model.cfg["max_seq_len"], architecture, _sha256_file(model_path)
 
 
-def _load_model_for_inference(model_path, rank, alpha, checkpoint_path):
-    model, tok, attn_attr, max_seq_len = _load_base_model(model_path)
-    _inject_lora(model, attn_attr, rank=rank, alpha=alpha)
+def _load_model_for_inference(model_path, rank, alpha, target_modules, checkpoint_path):
+    model, tok, attn_attr, max_seq_len, architecture, base_model_sha256 = _load_base_model(model_path)
+    _inject_lora(model, attn_attr, rank=rank, alpha=alpha, target_modules=target_modules)
     if checkpoint_path and os.path.exists(checkpoint_path):
-        lora_io.load_lora_adapter(model, checkpoint_path)
+        meta = lora_io.load_lora_adapter(model, checkpoint_path)
+        # Shape/rank matching alone (load_lora_adapter's own strict check)
+        # catches "this adapter doesn't fit these LoRA layers" but not "this
+        # adapter was trained against a *different* base model that happens
+        # to have identically-shaped attention projections" -- e.g. two
+        # different qwen2 GGUF fine-tunes, or qwen2 vs. a same-rank gemma3
+        # file. Compare the checkpoint's own recorded facts (added by
+        # train(), see xload_trainer.py) against what was just loaded rather
+        # than trusting a shape match alone.
+        expected_arch = meta.get("architecture")
+        if expected_arch and expected_arch != architecture:
+            raise ValueError(
+                "Adapter was trained on architecture %r but the currently loaded model is %r"
+                % (expected_arch, architecture)
+            )
+        expected_hash = meta.get("baseModelSha256")
+        if expected_hash and base_model_sha256 and expected_hash != base_model_sha256:
+            raise ValueError(
+                "Adapter's recorded base model hash does not match the currently loaded GGUF file "
+                "(trained against a different file with the same architecture)"
+            )
     return model, tok, max_seq_len
 
 
@@ -156,7 +190,7 @@ def _load_model_for_analysis(model_path):
     style from examples is a general capability the *base* weights already
     have, so this works even before training finishes, and doesn't need any
     particular training run's rank/alpha to match."""
-    model, tok, _attn_attr, max_seq_len = _load_base_model(model_path)
+    model, tok, _attn_attr, max_seq_len, _architecture, _base_model_sha256 = _load_base_model(model_path)
     return model, tok, max_seq_len
 
 
@@ -267,17 +301,30 @@ def generate(config_json, prompt, checkpoint_path, callback, model_path=""):
     lora_cfg = config.get("lora", {})
     rank = int(lora_cfg.get("rank", 16))
     alpha = float(lora_cfg.get("alpha", 32))
+    # Must match whatever train() actually used for this checkpoint -- see
+    # _inject_lora's own docstring (xload_trainer.py) on why a target list
+    # that doesn't match what training used isn't just "a different
+    # setting," it changes which Linear layers get LoRA-wrapped at all, so
+    # load_lora_adapter()'s per-layer shape match would (correctly) reject
+    # the checkpoint instead of loading it into the wrong layers.
+    target_modules = lora_cfg.get("targetModules") or ["q_proj", "k_proj", "v_proj", "o_proj"]
     max_new_tokens = max(1, min(int(config.get("maxNewTokens", 100)), MAX_NEW_TOKENS_CAP))
     temperature = float(config.get("temperature", 0.8))
     top_k = int(config.get("topK", 40))
 
     try:
-        model, tok, max_seq_len = _load_model_for_inference(model_path, rank, alpha, checkpoint_path)
+        model, tok, max_seq_len = _load_model_for_inference(
+            model_path, rank, alpha, target_modules, checkpoint_path,
+        )
     except Exception as e:
-        emit(state="FAILED", text="", message="%s: %s" % (type(e).__name__, e))
+        emit(
+            state="FAILED", text="",
+            errorCode=_classify_load_error(e),
+            message="%s: %s" % (type(e).__name__, e),
+        )
         return
 
-    prompt_ids = tok.encode(_format_sample({"instruction": prompt}), add_bos=True, add_eos=False)
+    prompt_ids = tok.encode(_format_prompt({"instruction": prompt}), add_bos=True, add_eos=False)
 
     try:
         generated_text = _run_generation_loop(
@@ -329,7 +376,11 @@ def analyze_personality(dataset_json, config_json, callback, model_path=""):
     try:
         model, tok, max_seq_len = _load_model_for_analysis(model_path)
     except Exception as e:
-        emit(state="FAILED", text="", message="%s: %s" % (type(e).__name__, e))
+        emit(
+            state="FAILED", text="",
+            errorCode=_classify_load_error(e),
+            message="%s: %s" % (type(e).__name__, e),
+        )
         return
 
     prompt_ids = tok.encode(_build_personality_prompt(samples), add_bos=True, add_eos=False)

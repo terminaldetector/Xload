@@ -9,4 +9,8 @@ data class GenerationProgress(
      *  multi-byte text correct (see [io.github.terminaldetector.xload.core.engine.InferenceEngine]). */
     val text: String,
     val message: String? = null,
+    /** Machine-readable failure reason on [GenerationState.FAILED], mirroring
+     *  [TrainingProgress.errorCode] -- e.g. "MODEL_FILE_NOT_FOUND",
+     *  "UNSUPPORTED_ARCHITECTURE", "MODEL_LOAD_FAILED". Null for every other state. */
+    val errorCode: String? = null,
 )

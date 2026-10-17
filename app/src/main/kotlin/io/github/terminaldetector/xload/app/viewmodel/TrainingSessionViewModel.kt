@@ -15,10 +15,12 @@ import io.github.terminaldetector.xload.core.engine.TrainingEngine
 import io.github.terminaldetector.xload.core.model.BaseModel
 import io.github.terminaldetector.xload.core.model.GenerationState
 import io.github.terminaldetector.xload.core.model.LoraConfig
+import io.github.terminaldetector.xload.core.model.ModelMode
 import io.github.terminaldetector.xload.core.model.StyleAnalysisProgress
 import io.github.terminaldetector.xload.core.model.StyleAnalysisState
 import io.github.terminaldetector.xload.core.model.TrainingConfig
 import io.github.terminaldetector.xload.core.model.TrainingProgress
+import io.github.terminaldetector.xload.core.model.TrainingState
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -143,6 +145,31 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
         val samples = _datasetResult.value?.samples ?: return
         if (samples.isEmpty()) return
 
+        // Fail-closed: "user attempted a real import" and "no import attempted"
+        // must never collapse into the same silent demo fallback. A non-null
+        // file *name* means a pick was attempted (set synchronously in
+        // onModelFilePicked, before the copy even starts); if the copy is
+        // still running or failed, importedModelFilePath stays null and
+        // training must not quietly substitute the demo model for what the
+        // user believes is their own GGUF file.
+        val attemptedImport = _importedModelFileName.value != null
+        val resolvedPath = _importedModelFilePath.value
+        if (attemptedImport && resolvedPath == null) {
+            _trainingProgress.value = TrainingProgress(
+                state = TrainingState.FAILED,
+                epoch = 0,
+                totalEpochs = 0,
+                step = 0,
+                totalSteps = 0,
+                loss = 0f,
+                errorCode = "MODEL_IMPORT_NOT_READY",
+                message = "Файл модели ещё копируется или не удалось его скопировать — " +
+                    "подождите или выберите файл заново.",
+            )
+            return
+        }
+        val modelMode = if (attemptedImport) ModelMode.REAL_GGUF else ModelMode.DEMO
+
         val params = _trainingParams.value
         val config = TrainingConfig(
             baseModel = model,
@@ -151,7 +178,8 @@ class TrainingSessionViewModel(application: Application) : AndroidViewModel(appl
             gradientAccumulationSteps = params.gradientAccumulationSteps,
             epochs = params.epochs,
             learningRate = params.learningRate,
-            modelFilePath = _importedModelFilePath.value,
+            modelMode = modelMode,
+            modelFilePath = resolvedPath,
         )
 
         trainingJob?.cancel()

@@ -11,6 +11,18 @@ data class TrainingProgress(
     val loss: Float,
     val etaSeconds: Long? = null,
     val message: String? = null,
+    /** Machine-readable failure reason (e.g. "MODEL_FILE_NOT_FOUND",
+     *  "UNSUPPORTED_ARCHITECTURE") set alongside [message] on [TrainingState.FAILED]
+     *  -- lets the UI (or a future retry/diagnostic flow) branch on the failure kind
+     *  without parsing the human-readable message. Null for every other state. */
+    val errorCode: String? = null,
+    /** Micro-batches completed / total within the *current* effective (optimizer)
+     *  step -- [step]/[totalSteps] alone don't distinguish "finished" from
+     *  "accumulating gradient, optimizer hasn't stepped yet" once
+     *  gradientAccumulationSteps > 1. Null for engines that don't report it
+     *  (e.g. [io.github.terminaldetector.xload.core.engine.reference.ReferenceLoraEngine]). */
+    val microStep: Int? = null,
+    val totalMicroSteps: Int? = null,
     /** Set only on the terminal [TrainingState.COMPLETED] emission by engines that
      *  keep the trained weights in memory (e.g. [io.github.terminaldetector.xload.core.engine.reference.ReferenceLoraEngine]). */
     val checkpoint: AdapterCheckpoint? = null,
