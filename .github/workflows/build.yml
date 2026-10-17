@@ -52,6 +52,20 @@ jobs:
           python scripts/python_tests/verify_p0.py
           python scripts/python_tests/verify_p04.py
 
+      # P1 Stage 1: a standalone (host-compiler, no NDK needed yet) proof
+      # that the new native quantized-Linear-plus-LoRA forward/backward
+      # math is right -- see native/p1_quantized_lora/README.md. Fixtures
+      # are regenerated here rather than trusted from the committed copies,
+      # so the generator and the checked-in .txt files can never silently
+      # drift apart.
+      - name: Build and run P1 Stage 1 native numeric verification
+        run: |
+          cd native/p1_quantized_lora
+          python generate_fixtures.py
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+
       # Google removed the legacy standalone "tools" package from the SDK
       # repository manifest (external change, dated ~2026-09-14/15 -- this
       # repo's own run #4 still succeeded with the action's untouched default
